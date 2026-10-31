@@ -2,11 +2,11 @@ import { App, Modal } from 'obsidian';
 import type { TrackerConfig, TrackerStyle } from './types';
 import { suggestTrackerKeys } from './tracker-service';
 import { t } from './i18n';
-import { inheritDashboardThemeVars } from './theme-utils';
+import { initializeDashboardModal } from './theme-utils';
+import { createModalInputField } from './modal-form';
 
 export class TrackerConfigModal extends Modal {
 	private onSave: (title: string, config: TrackerConfig) => void;
-	private theme: string;
 
 	private keyValue = '';
 	private daysValue = 30;
@@ -15,29 +15,26 @@ export class TrackerConfigModal extends Modal {
 	constructor(
 		app: App,
 		onSave: (title: string, config: TrackerConfig) => void,
-		theme?: string,
 	) {
 		super(app);
 		this.onSave = onSave;
-		this.theme = theme ?? 'earth';
 	}
 
 	onOpen(): void {
-		const { contentEl, containerEl } = this;
-		containerEl.dataset.theme = this.theme;
+		const { contentEl } = this;
 		contentEl.addClass('dashboard-modal');
-		inheritDashboardThemeVars(contentEl);
+		initializeDashboardModal(this);
 		contentEl.createEl('h2', { text: t('tracker.configTitle') });
 
 		const form = contentEl.createDiv({ cls: 'dashboard-modal-form' });
 
 		// Frontmatter key input
-		const keyField = form.createDiv({ cls: 'chart-config-field' });
-		keyField.createEl('label', { text: t('tracker.keyLabel') });
-		const keyInput = keyField.createEl('input', {
-			cls: 'dashboard-modal-input',
-			attr: { type: 'text', placeholder: t('tracker.keyPlaceholder') },
+		const keyInput = createModalInputField(form, {
+			label: t('tracker.keyLabel'),
+			placeholder: t('tracker.keyPlaceholder'),
+			fieldClass: 'chart-config-field',
 		});
+		const keyField = keyInput.parentElement!;
 		keyInput.addEventListener('input', () => {
 			this.keyValue = keyInput.value.trim();
 		});

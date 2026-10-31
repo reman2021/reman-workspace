@@ -1,16 +1,16 @@
+import { handleAsync } from './async-utils';
 import { Modal, setIcon } from 'obsidian';
 import type DashboardPlugin from './main';
 import type { TaskTemplate } from './types';
 import { t } from './i18n';
 import { showConfirmDialog } from './confirm-dialog';
-import { inheritDashboardThemeVars } from './theme-utils';
+import { initializeDashboardModal } from './theme-utils';
 
 type TemplateSelectCallback = (template: TaskTemplate) => void;
 
 export class TemplatePickerModal extends Modal {
 	private plugin: DashboardPlugin;
 	private onSelect: TemplateSelectCallback;
-	private theme: string;
 	private mode: 'pick' | 'edit' = 'pick';
 	private editingTemplate: TaskTemplate | null = null;
 
@@ -18,21 +18,16 @@ export class TemplatePickerModal extends Modal {
 		app: import('obsidian').App,
 		plugin: DashboardPlugin,
 		onSelect: TemplateSelectCallback,
-		theme?: string,
 	) {
 		super(app);
 		this.plugin = plugin;
 		this.onSelect = onSelect;
-		this.theme = theme ?? 'earth';
 	}
 
 	onOpen(): void {
-		const { contentEl, containerEl } = this;
-		containerEl.dataset.theme = this.theme;
+		const { contentEl } = this;
 		contentEl.addClass('dashboard-modal');
-		containerEl.addClass('modal--dashboard');
-		containerEl.parentElement?.addClass('modal-bg--dashboard');
-		inheritDashboardThemeVars(contentEl);
+		initializeDashboardModal(this);
 		this.render();
 	}
 
@@ -193,7 +188,7 @@ export class TemplatePickerModal extends Modal {
 					});
 					setIcon(deleteBtn, 'trash-2');
 					const tmplId = tmpl.id;
-					deleteBtn.addEventListener('click', async () => {
+					deleteBtn.addEventListener('click', handleAsync(async () => {
 						const confirmed = await showConfirmDialog(this.app, {
 							title: t('common.confirmDelete'),
 							message: t('common.confirmDeleteMessage'),
@@ -202,7 +197,7 @@ export class TemplatePickerModal extends Modal {
 						const updated = templates.filter(item => item.id !== tmplId);
 						await this.saveTemplates(updated);
 						this.render();
-					});
+					}));
 				}
 			}
 
@@ -300,7 +295,7 @@ export class TemplatePickerModal extends Modal {
 			cls: 'mod-cta',
 			text: t('template.save'),
 		});
-		saveBtn.addEventListener('click', async () => {
+		saveBtn.addEventListener('click', handleAsync(async () => {
 			const name = nameInput.value.trim();
 			if (!name) {
 				nameInput.focus();
@@ -326,7 +321,7 @@ export class TemplatePickerModal extends Modal {
 			this.editingTemplate = null;
 			this.mode = 'edit';
 			this.render();
-		});
+		}));
 
 		nameInput.focus();
 	}

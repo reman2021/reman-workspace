@@ -1,11 +1,10 @@
 import { App, TAbstractFile, TFile } from 'obsidian';
-import type { DashboardSettings, DashboardCard, DashboardData, TaskItem, QuickAction, BannerData, CardType } from './types';
+import type { DashboardSettings, DashboardCard, DashboardData, DashboardUpdate, TaskItem, QuickAction, BannerData, CardType } from './types';
 import { parse, serialize, generateDefaultMarkdown } from './parser';
 import { t } from './i18n';
 
-type DataCallback = (data: DashboardData) => void;
+type DataCallback = (data: DashboardData, update: DashboardUpdate) => void;
 
-const KNOWN_METADATA_KEYS = new Set(['link', 'progress', 'due', 'streak', 'type']);
 
 export class SyncEngine {
 	private app: App;
@@ -38,7 +37,7 @@ export class SyncEngine {
 	async init(): Promise<void> {
 		await this.findOrCreateFile();
 		this.registerFileWatcher();
-		await this.load();
+		await this.load('initial');
 	}
 
 	destroy(): void {
@@ -62,8 +61,12 @@ export class SyncEngine {
 		return this.data;
 	}
 
+	isDashboardFile(file: TAbstractFile | null | undefined): boolean {
+		return Boolean(file && this.file && file.path === this.file.path);
+	}
+
 	async refresh(): Promise<void> {
-		await this.load();
+		await this.load('external');
 	}
 
 	async toggleTask(cardId: string, taskIndex: number, checked: boolean): Promise<void> {
@@ -87,7 +90,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async reorderTask(cardId: string, fromIndex: number, toIndex: number): Promise<void> {
@@ -109,7 +112,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async moveTaskToCard(srcCardId: string, taskIndex: number, destCardId: string, destIndex: number): Promise<void> {
@@ -142,7 +145,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(srcCardId, destCardId));
 	}
 
 	async editTask(cardId: string, taskIndex: number, newText: string): Promise<void> {
@@ -160,7 +163,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async addTask(cardId: string, text: string): Promise<void> {
@@ -176,7 +179,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async deleteTask(cardId: string, taskIndex: number): Promise<void> {
@@ -194,7 +197,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async updateCard(cardId: string, updates: Partial<Pick<DashboardCard, 'title' | 'body' | 'dueDate' | 'color' | 'coverImage' | 'archived' | 'archivedAt' | 'width' | 'size' | 'gridCols' | 'gridRows' | 'gridCol' | 'gridRow'>>): Promise<void> {
@@ -209,7 +212,7 @@ export class SyncEngine {
 				),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async editTaskReminder(cardId: string, taskIndex: number, reminder: string | undefined): Promise<void> {
@@ -229,11 +232,12 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async deleteCard(cardId: string): Promise<void> {
 		if (!this.data) return;
+		const update = this.columnsUpdateForCards(cardId);
 
 		this.data = {
 			...this.data,
@@ -242,7 +246,7 @@ export class SyncEngine {
 				cards: col.cards.filter(c => c.id !== cardId),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(update);
 	}
 
 	async archiveCard(cardId: string): Promise<void> {
@@ -294,7 +298,7 @@ export class SyncEngine {
 					: col
 			),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'columns', columnNames: [columnName] });
 	}
 
 	async addColumn(name: string, sectionType?: string): Promise<void> {
@@ -304,10 +308,10 @@ export class SyncEngine {
 			...this.data,
 			columns: [...this.data.columns, { name, color: '#6366f1', sectionType, cards: [] }],
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'full', reason: 'structure' });
 	}
 
-	async updateLibraryConfig(columnName: string, config: import('./types').LibraryConfig): Promise<void> {
+	async updateLibraryConfig(columnName: string, config: import('./types').LibraryConfig, notify = true): Promise<void> {
 		if (!this.data) return;
 
 		this.data = {
@@ -316,7 +320,7 @@ export class SyncEngine {
 				col.name === columnName ? { ...col, libraryConfig: config } : col
 			),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(notify ? { scope: 'columns', columnNames: [columnName] } : null);
 	}
 
 
@@ -329,7 +333,7 @@ export class SyncEngine {
 				col.name === oldName ? { ...col, name: newName } : col
 			),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'full', reason: 'structure' });
 	}
 
 	async updateBanner(updates: Partial<BannerData>): Promise<void> {
@@ -338,7 +342,7 @@ export class SyncEngine {
 			...this.data,
 			banner: { ...this.data.banner, ...updates },
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'banner' });
 	}
 
 	async addQuickAction(action: QuickAction): Promise<void> {
@@ -347,7 +351,7 @@ export class SyncEngine {
 			...this.data,
 			quickActions: [...this.data.quickActions, action],
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'quick-actions' });
 	}
 
 	async removeQuickAction(index: number): Promise<void> {
@@ -356,7 +360,7 @@ export class SyncEngine {
 			...this.data,
 			quickActions: this.data.quickActions.filter((_, i) => i !== index),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'quick-actions' });
 	}
 
 	async reorderQuickActions(order: string[]): Promise<void> {
@@ -365,7 +369,7 @@ export class SyncEngine {
 			...this.data,
 			quickActionOrder: order,
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'quick-actions' });
 	}
 
 	async removeQuickActionByKey(key: string): Promise<void> {
@@ -388,7 +392,7 @@ export class SyncEngine {
 				quickActionOrder: (this.data.quickActionOrder ?? []).filter(k => k !== key),
 			};
 		}
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'quick-actions' });
 	}
 
 	async updateMemoCard(cardId: string, updates: { body: string; blockquote: string }): Promise<void> {
@@ -403,7 +407,7 @@ export class SyncEngine {
 				),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async reorderDocPaths(cardId: string, fromIndex: number, toIndex: number): Promise<void> {
@@ -429,7 +433,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async moveDocToCard(srcCardId: string, docIndex: number, destCardId: string, destIndex: number): Promise<void> {
@@ -472,7 +476,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(srcCardId, destCardId));
 	}
 
 	async updateProjectDocs(cardId: string, docPaths: string[]): Promise<void> {
@@ -489,7 +493,7 @@ export class SyncEngine {
 				),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async addDocToCard(cardId: string, filePath: string): Promise<void> {
@@ -512,7 +516,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async addFileLinkToMemo(cardId: string, filePath: string): Promise<void> {
@@ -531,7 +535,7 @@ export class SyncEngine {
 				}),
 			})),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk(this.columnsUpdateForCards(cardId));
 	}
 
 	async updateMemoColor(cardId: string, color: string): Promise<void> {
@@ -560,7 +564,13 @@ export class SyncEngine {
 
 	async replaceData(newData: DashboardData): Promise<void> {
 		this.data = newData;
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'full', reason: 'structure' });
+	}
+
+	async updateTodoSources(columnName: string, config: import('./types').TodoSourceConfig): Promise<void> {
+		if (!this.data) return;
+		this.data = { ...this.data, columns: this.data.columns.map(column => column.name === columnName ? { ...column, todoSources: config } : column) };
+		await this.writeToDisk({ scope: 'columns', columnNames: [columnName] });
 	}
 
 	async addHeatmapItem(columnName: string, item: import('./types').HeatmapItem): Promise<void> {
@@ -574,7 +584,7 @@ export class SyncEngine {
 					: col
 			),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'columns', columnNames: [columnName] });
 	}
 
 	async updateHeatmapItem(columnName: string, itemId: string, updates: Partial<import('./types').HeatmapItem>): Promise<void> {
@@ -593,7 +603,7 @@ export class SyncEngine {
 					: col
 			),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'columns', columnNames: [columnName] });
 	}
 
 	async deleteHeatmapItem(columnName: string, itemId: string): Promise<void> {
@@ -607,7 +617,7 @@ export class SyncEngine {
 					: col
 			),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'columns', columnNames: [columnName] });
 	}
 
 	async toggleHeatmapLayout(columnName: string): Promise<void> {
@@ -621,7 +631,7 @@ export class SyncEngine {
 					: col
 			),
 		};
-		await this.writeToDisk();
+		await this.writeToDisk({ scope: 'columns', columnNames: [columnName] });
 	}
 
 
@@ -633,7 +643,6 @@ export class SyncEngine {
 			return t('sync.memoTitle', { date });
 		}
 		if (effective === 'todo' || (!effective && columnName.toLowerCase() === 'todo')) return t('sync.todoTitle');
-		if (effective === 'notes') return t('sync.notesTitle');
 		if (columnName.toLowerCase() === 'projects') return t('sync.projectTitle');
 		return t('sync.newCard');
 	}
@@ -642,8 +651,18 @@ export class SyncEngine {
 		const effective = sectionType?.toLowerCase();
 		if (effective === 'todo' || (!effective && columnName.toLowerCase() === 'todo')) return 'task';
 		if (effective === 'memo' || (!effective && columnName.toLowerCase() === 'memo')) return 'generic';
-		if (effective === 'dashboard' || (!effective && columnName.toLowerCase() === 'dashboard')) return 'weather';
+		if (effective === 'dashboard' || (!effective && columnName.toLowerCase() === 'dashboard')) return 'tracker';
 		return 'project';
+	}
+
+	private columnsUpdateForCards(...cardIds: string[]): DashboardUpdate {
+		const ids = new Set(cardIds);
+		const columnNames = this.data?.columns
+			.filter(column => column.cards.some(card => ids.has(card.id)))
+			.map(column => column.name) ?? [];
+		return columnNames.length > 0
+			? { scope: 'columns', columnNames: [...new Set(columnNames)] }
+			: { scope: 'full', reason: 'mixed' };
 	}
 
 	private async findOrCreateFile(): Promise<void> {
@@ -717,7 +736,7 @@ export class SyncEngine {
 		}
 
 		this.data = { ...this.data, banner, quickActions, columns };
-		this.writeToDisk();
+		void this.writeToDisk({ scope: 'full', reason: 'mixed' });
 	}
 
 	private scheduleDeferredWrite(): void {
@@ -725,7 +744,7 @@ export class SyncEngine {
 		this.deferredWriteTimer = setTimeout(() => {
 			this.deferredWriteTimer = null;
 			if (this.data) {
-				this.writeToDisk();
+				void this.writeToDisk({ scope: 'full', reason: 'mixed' });
 			}
 		}, 1000);
 	}
@@ -733,11 +752,11 @@ export class SyncEngine {
 	private onFileModify(): void {
 		if (this.debounceTimer) clearTimeout(this.debounceTimer);
 		this.debounceTimer = setTimeout(() => {
-			this.load();
+			void this.load('external');
 		}, this.debounceMs);
 	}
 
-	private async load(): Promise<void> {
+	private async load(reason: 'initial' | 'external'): Promise<void> {
 		if (!this.file) return;
 
 		const content = await this.app.vault.read(this.file);
@@ -745,10 +764,10 @@ export class SyncEngine {
 		if (hash === this.lastWrittenHash) return;
 
 		this.data = parse(content);
-		this.notifyCallbacks();
+		this.notifyCallbacks({ scope: 'full', reason });
 	}
 
-	private async writeToDisk(): Promise<void> {
+	private async writeToDisk(update: DashboardUpdate | null = { scope: 'full', reason: 'mixed' }): Promise<void> {
 		if (!this.data || !this.file) return;
 
 		const content = serialize(this.data);
@@ -775,7 +794,8 @@ export class SyncEngine {
 			}
 		});
 
-		this.notifyCallbacks();
+		if (update) this.notifyCallbacks(update);
+		await this.writeQueue;
 	}
 
 	private async createBackup(currentContent: string): Promise<void> {
@@ -803,10 +823,10 @@ export class SyncEngine {
 		}
 	}
 
-	private notifyCallbacks(): void {
+	private notifyCallbacks(update: DashboardUpdate): void {
 		if (!this.data) return;
 		for (const cb of this.callbacks) {
-			cb(this.data);
+			cb(this.data, update);
 		}
 	}
 }

@@ -1,6 +1,8 @@
+import { formatValue } from './value-utils';
 import { App, TFile, setIcon } from 'obsidian';
 import type { LibraryConfig, PropertyFilter, LibraryViewMode } from './types';
 import { t, getLanguage } from './i18n';
+import { inheritDashboardThemeVars } from './theme-utils';
 
 export interface LibraryFileResult {
 	file: TFile;
@@ -33,10 +35,10 @@ export function extractFrontmatterProperties(app: App): Map<string, Set<string>>
 			const set = props.get(key)!;
 			if (Array.isArray(value)) {
 				for (const item of value) {
-					if (item != null) set.add(String(item));
+					if (item != null) set.add(formatValue(item));
 				}
 			} else if (value != null) {
-				set.add(String(value));
+				set.add(formatValue(value));
 			}
 		}
 
@@ -44,9 +46,9 @@ export function extractFrontmatterProperties(app: App): Map<string, Set<string>>
 		const tagsSet = props.get('tags')!;
 		if (fm.tags) {
 			if (Array.isArray(fm.tags)) {
-				for (const tag of fm.tags) tagsSet.add(String(tag));
+				for (const tag of fm.tags) tagsSet.add(formatValue(tag));
 			} else {
-				tagsSet.add(String(fm.tags));
+				tagsSet.add(formatValue(fm.tags));
 			}
 		}
 		if (cache.tags) {
@@ -114,7 +116,7 @@ function evaluateFilter(
 			if (Array.isArray(fm.tags)) {
 				fileTags.push(...fm.tags.map(String));
 			} else {
-				fileTags.push(String(fm.tags));
+				fileTags.push(formatValue(fm.tags));
 			}
 		}
 		if (cache?.tags) {
@@ -143,16 +145,16 @@ function evaluateFilter(
 	if (value == null) return false;
 
 	if (Array.isArray(value)) {
-		return value.some(item => filter.values.includes(String(item)));
+		return value.some(item => filter.values.includes(formatValue(item)));
 	}
 
-	return filter.values.includes(String(value));
+	return filter.values.includes(formatValue(value));
 }
 
 async function loadPreview(app: App, file: TFile): Promise<string> {
 	const cache = app.metadataCache.getFileCache(file);
 	if (!cache?.frontmatter?.position) return '';
-	const startLine = cache.frontmatter.position.end.line + 1;
+	const startLine = (cache.frontmatter.position as { end: { line: number } }).end.line + 1;
 	const raw = await app.vault.cachedRead(file);
 	const lines = raw.split('\n');
 	const previewLines: string[] = [];
@@ -185,8 +187,8 @@ function comparePropertyValues(a: unknown, b: unknown): number {
 	if (a == null && b == null) return 0;
 	if (a == null) return 1;
 	if (b == null) return -1;
-	const sa = String(a);
-	const sb = String(b);
+	const sa = formatValue(a);
+	const sb = formatValue(b);
 	const na = Number(sa);
 	const nb = Number(sb);
 	if (!isNaN(na) && !isNaN(nb)) return na - nb;
@@ -214,9 +216,16 @@ function formatDate(ts: number): string {
 
 // ===== Calendar Popup =====
 
+const popupCleanups = new Set<() => void>();
+export function destroyLibraryPopups(): void {
+	for (const cleanup of [...popupCleanups]) cleanup();
+	closeCalendarPopup();
+}
+let calendarCleanup: (() => void) | null = null;
 let activeCalendarPopup: HTMLElement | null = null;
 
 function closeCalendarPopup(): void {
+	calendarCleanup?.(); calendarCleanup = null;
 	if (activeCalendarPopup) {
 		activeCalendarPopup.remove();
 		activeCalendarPopup = null;
@@ -228,30 +237,21 @@ function showCalendarPopup(anchor: HTMLElement, initialValue: string, onSelect: 
 
 		const popup = document.body.createDiv({ cls: 'dashboard-task-reminder-popup dashboard-library-calendar-popup' });
 
-	const dashboardRoot = anchor.closest('.apex-dashboard-root') as HTMLElement;
-	if (dashboardRoot) {
-		const rs = getComputedStyle(dashboardRoot);
-		const themeVars = ['--db-bg', '--db-bg-card', '--db-bg-card-hover', '--db-border-card',
-			'--db-text', '--db-text-muted', '--db-accent', '--db-radius-md', '--db-radius-sm', '--db-font'];
-		themeVars.forEach(v => {
-			const val = rs.getPropertyValue(v).trim();
-			if (val) popup.style.setProperty(v, val);
-		});
-	}
+	inheritDashboardThemeVars(popup, anchor);
 
-	popup.style.background = 'var(--db-bg-card, rgba(255, 255, 255, 0.06))';
-	popup.style.backdropFilter = 'blur(16px)';
-	popup.style.color = 'var(--db-text, var(--text-normal))';
-	popup.style.borderColor = 'var(--db-border-card, rgba(255,255,255,0.1))';
+	popup.setCssProps({ 'background': 'var(--db-bg-card, rgba(255, 255, 255, 0.06))' });
+	popup.setCssProps({ 'backdrop-filter': 'blur(16px)' });
+	popup.setCssProps({ 'color': 'var(--db-text, var(--text-normal))' });
+	popup.setCssProps({ 'border-color': 'var(--db-border-card, rgba(255,255,255,0.1))' });
 
 	const rect = anchor.getBoundingClientRect();
-	popup.style.position = 'fixed';
-	popup.style.top = `${rect.bottom + 4}px`;
+	popup.setCssProps({ 'position': 'fixed' });
+	popup.setCssProps({ 'top': `${rect.bottom + 4}px` });
 	const popupWidth = 240;
 	if (rect.left + popupWidth > window.innerWidth) {
-		popup.style.right = `${window.innerWidth - rect.right}px`;
+		popup.setCssProps({ 'right': `${window.innerWidth - rect.right}px` });
 	} else {
-		popup.style.left = `${rect.left}px`;
+		popup.setCssProps({ 'left': `${rect.left}px` });
 	}
 
 	let selectedYear: number;
@@ -290,7 +290,7 @@ function showCalendarPopup(anchor: HTMLElement, initialValue: string, onSelect: 
 		calGrid.empty();
 		const y = viewYear.value;
 		const m = viewMonth.value;
-		monthLabel.setText(`${y}-${String(m + 1).padStart(2, '0')}`);
+		monthLabel.setText(`${y}-${formatValue(m + 1).padStart(2, '0')}`);
 
 		for (const d of dayNames) {
 			calGrid.createDiv({ cls: 'dashboard-task-reminder-calendar-header', text: d });
@@ -304,14 +304,14 @@ function showCalendarPopup(anchor: HTMLElement, initialValue: string, onSelect: 
 
 		for (let i = firstDay - 1; i >= 0; i--) {
 			const d = daysInPrev - i;
-			calGrid.createEl('button', { cls: 'dashboard-task-reminder-calendar-day dashboard-task-reminder-calendar-day--other-month', text: String(d) });
+			calGrid.createEl('button', { cls: 'dashboard-task-reminder-calendar-day dashboard-task-reminder-calendar-day--other-month', text: formatValue(d) });
 		}
 
 		for (let d = 1; d <= daysInMonth; d++) {
 			const cls = ['dashboard-task-reminder-calendar-day'];
 			if (isCurrentMonth && d === today.getDate()) cls.push('dashboard-task-reminder-calendar-day--today');
 			if (y === selectedYear && m === selectedMonth && d === selectedDay) cls.push('dashboard-task-reminder-calendar-day--selected');
-			const dayBtn = calGrid.createEl('button', { cls: cls.join(' '), text: String(d) });
+			const dayBtn = calGrid.createEl('button', { cls: cls.join(' '), text: formatValue(d) });
 			dayBtn.addEventListener('click', (e) => {
 				e.stopPropagation();
 				selectedYear = y;
@@ -324,7 +324,7 @@ function showCalendarPopup(anchor: HTMLElement, initialValue: string, onSelect: 
 		const totalCells = firstDay + daysInMonth;
 		const remaining = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7);
 		for (let d = 1; d <= remaining; d++) {
-			calGrid.createEl('button', { cls: 'dashboard-task-reminder-calendar-day dashboard-task-reminder-calendar-day--other-month', text: String(d) });
+			calGrid.createEl('button', { cls: 'dashboard-task-reminder-calendar-day dashboard-task-reminder-calendar-day--other-month', text: formatValue(d) });
 		}
 	};
 
@@ -344,7 +344,7 @@ function showCalendarPopup(anchor: HTMLElement, initialValue: string, onSelect: 
 
 	btnRow.querySelector('.mod-cta')!.addEventListener('click', (e) => {
 		e.stopPropagation();
-		const date = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(selectedDay).padStart(2, '0')}`;
+		const date = `${selectedYear}-${formatValue(selectedMonth + 1).padStart(2, '0')}-${formatValue(selectedDay).padStart(2, '0')}`;
 		onSelect(date);
 		closeCalendarPopup();
 	});
@@ -360,7 +360,8 @@ function showCalendarPopup(anchor: HTMLElement, initialValue: string, onSelect: 
 			document.removeEventListener('mousedown', outsideClick);
 		}
 	};
-	setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
+	const timer = setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
+	calendarCleanup = () => { clearTimeout(timer); document.removeEventListener('mousedown', outsideClick); };
 
 	activeCalendarPopup = popup;
 	renderCalendar();
@@ -456,28 +457,23 @@ export function renderLibrarySection(
 			updateFilterBtnState();
 		}
 
+		function onOutsideClick(event: MouseEvent): void {
+			if (filterPopup && !filterPopup.contains(event.target as Node) && !filterBtn.contains(event.target as Node)) closePopup();
+		}
 		function openPopup(): void {
 			closePopup();
+			document.addEventListener('click', onOutsideClick);
+			popupCleanups.add(closePopup);
 			filterPopup = document.body.createDiv({ cls: 'dashboard-library-filter-popup' });
 
-			// Inherit theme from dashboard
-			const dashboardRoot = filterBtn.closest('.apex-dashboard-root') as HTMLElement;
-			if (dashboardRoot) {
-				const rs = getComputedStyle(dashboardRoot);
-				['--db-bg', '--db-bg-card', '--db-bg-card-hover', '--db-border-card',
-					'--db-text', '--db-text-muted', '--db-accent', '--db-radius-md', '--db-radius-sm', '--db-font',
-					'--db-bg-input', '--db-bg-hover', '--db-bg-btn', '--db-text-normal', '--db-border-input'].forEach(v => {
-					const val = rs.getPropertyValue(v).trim();
-					if (val) filterPopup!.style.setProperty(v, val);
-				});
-			}
+			inheritDashboardThemeVars(filterPopup, filterBtn);
 
 			// Position below the filter button
 			const rect = filterBtn.getBoundingClientRect();
-			filterPopup.style.position = 'fixed';
-			filterPopup.style.top = `${rect.bottom + 4}px`;
-			filterPopup.style.left = `${rect.left}px`;
-			filterPopup.style.zIndex = '10000';
+			filterPopup.setCssProps({ 'position': 'fixed' });
+			filterPopup.setCssProps({ 'top': `${rect.bottom + 4}px` });
+			filterPopup.setCssProps({ 'left': `${rect.left}px` });
+			filterPopup.setCssProps({ 'z-index': '10000' });
 
 			// Property selector
 			const propRow = filterPopup.createDiv({ cls: 'dashboard-library-quickfilter-row' });
@@ -537,6 +533,8 @@ export function renderLibrarySection(
 		}
 
 		function closePopup(): void {
+			document.removeEventListener('click', onOutsideClick);
+			popupCleanups.delete(closePopup);
 			if (filterPopup) {
 				filterPopup.remove();
 				filterPopup = null;
@@ -574,11 +572,7 @@ export function renderLibrarySection(
 			}
 		});
 
-		document.addEventListener('click', (e) => {
-			if (filterPopup && !filterPopup.contains(e.target as Node) && !filterBtn.contains(e.target as Node)) {
-				closePopup();
-			}
-		});
+
 
 		renderFilterTag();
 		updateFilterBtnState();
@@ -594,7 +588,7 @@ export function renderLibrarySection(
 	const pageSize = config.pageSize ?? DEFAULT_PAGE_SIZE;
 	const pageSizeSelect = toolbar.createEl('select', { cls: 'dashboard-library-page-size' });
 	for (const size of PAGE_SIZE_OPTIONS) {
-		const opt = pageSizeSelect.createEl('option', { text: t('library.pageSize', { count: size }), attr: { value: String(size) } });
+		const opt = pageSizeSelect.createEl('option', { text: t('library.pageSize', { count: size }), attr: { value: formatValue(size) } });
 		if (size === pageSize) opt.selected = true;
 	}
 	pageSizeSelect.addEventListener('change', () => {
@@ -644,6 +638,7 @@ export function renderLibrarySection(
 
 		const totalResults = results.length;
 		countEl.textContent = t('library.fileCount', { count: totalResults });
+		el.toggleClass('dashboard-section-row--empty', totalResults === 0);
 
 		if (totalResults === 0 && currentConfig.filters.length === 0) {
 			contentArea.createDiv({ cls: 'dashboard-library-empty', text: t('library.noConfig') });
@@ -762,7 +757,7 @@ function renderPagination(
 	for (let i = startPage; i <= endPage; i++) {
 		const pageBtn = nav.createDiv({
 			cls: 'dashboard-library-pagination-page' + (i === currentPage ? ' active' : ''),
-			text: String(i),
+			text: formatValue(i),
 		});
 		if (i !== currentPage) {
 			pageBtn.addEventListener('click', () => onPageChange(i));
@@ -773,7 +768,7 @@ function renderPagination(
 		if (endPage < totalPages - 1) {
 			nav.createDiv({ cls: 'dashboard-library-pagination-ellipsis', text: '...' });
 		}
-		const lastBtn = nav.createDiv({ cls: 'dashboard-library-pagination-page', text: String(totalPages) });
+		const lastBtn = nav.createDiv({ cls: 'dashboard-library-pagination-page', text: formatValue(totalPages) });
 		lastBtn.addEventListener('click', () => onPageChange(totalPages));
 	}
 
@@ -788,24 +783,7 @@ function renderPagination(
 }
 
 function openFile(app: App, file: TFile): void {
-	app.workspace.getLeaf(false).openFile(file);
-}
-
-function renderBadgeRow(container: HTMLElement, fm: Record<string, unknown>, maxBadges = 5): void {
-	const badgeWrap = container.createDiv({ cls: 'dashboard-library-badges' });
-	let count = 0;
-	for (const [key, value] of Object.entries(fm)) {
-		if (key === 'position' || count >= maxBadges) break;
-		if (value == null) continue;
-		const badge = badgeWrap.createDiv({ cls: 'dashboard-library-badge' });
-		badge.createSpan({ cls: 'dashboard-library-badge-key', text: key });
-		if (Array.isArray(value)) {
-			badge.createSpan({ cls: 'dashboard-library-badge-val', text: value.map(String).join(', ') });
-		} else {
-			badge.createSpan({ cls: 'dashboard-library-badge-val', text: String(value) });
-		}
-		count++;
-	}
+	void app.workspace.getLeaf(false).openFile(file);
 }
 
 function renderGridView(container: HTMLElement, results: LibraryFileResult[], app: App): void {
@@ -849,7 +827,7 @@ function renderListView(container: HTMLElement, results: LibraryFileResult[], ap
 		item.addEventListener('click', () => openFile(app, result.file));
 
 		item.createDiv({ cls: 'dashboard-library-list-name', text: result.basename });
-		const spacer = item.createDiv({ cls: 'dashboard-library-list-spacer' });
+		item.createDiv({ cls: 'dashboard-library-list-spacer' });
 		item.createDiv({ cls: 'dashboard-library-list-date', text: formatDate(result.ctime) });
 	}
 }
@@ -866,7 +844,7 @@ function startCellEdit(
 	const isArr = Array.isArray(originalValue);
 	const displayValue = originalValue == null ? '' : isArr
 		? (originalValue as unknown[]).map(String).join(', ')
-		: String(originalValue);
+		: formatValue(originalValue);
 
 	td.empty();
 	td.removeClass('dashboard-library-table-empty');
@@ -901,7 +879,7 @@ function startCellEdit(
 		}
 
 		// Write via processFrontMatter
-		app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
+		void app.fileManager.processFrontMatter(file, (fm: Record<string, unknown>) => {
 			if (newValue === null) {
 				delete fm[prop];
 			} else {
@@ -916,7 +894,7 @@ function startCellEdit(
 		} else if (Array.isArray(newValue)) {
 			td.textContent = newValue.join(', ');
 		} else {
-			td.textContent = String(newValue);
+			td.textContent = formatValue(newValue);
 		}
 	};
 
@@ -979,7 +957,7 @@ function renderTableView(container: HTMLElement, results: LibraryFileResult[], a
 				} else if (Array.isArray(value)) {
 					td.textContent = value.map(String).join(', ');
 				} else {
-					td.textContent = String(value);
+					td.textContent = formatValue(value);
 				}
 				td.addClass('dashboard-library-table-editable');
 				td.addEventListener('dblclick', (e) => {
@@ -1007,12 +985,12 @@ function renderKanbanView(container: HTMLElement, results: LibraryFileResult[], 
 		}
 		if (Array.isArray(value)) {
 			for (const v of value) {
-				const key = String(v);
+				const key = formatValue(v);
 				if (!groups.has(key)) groups.set(key, []);
 				groups.get(key)!.push(result);
 			}
 		} else {
-			const key = String(value);
+			const key = formatValue(value);
 			if (!groups.has(key)) groups.set(key, []);
 			groups.get(key)!.push(result);
 		}

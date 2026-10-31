@@ -1,6 +1,6 @@
 import { App, Modal } from 'obsidian';
 import { t } from './i18n';
-import { inheritDashboardThemeVars } from './theme-utils';
+import { initializeDashboardModal } from './theme-utils';
 
 export class ReminderNoticeModal extends Modal {
 	constructor(
@@ -14,7 +14,7 @@ export class ReminderNoticeModal extends Modal {
 
 	onOpen(): void {
 		this.contentEl.addClass('dashboard-modal', 'dashboard-reminder-modal');
-		inheritDashboardThemeVars(this.contentEl);
+		initializeDashboardModal(this);
 		this.contentEl.createDiv({ cls: 'dashboard-reminder-message', text: t('reminder.dueNotice', { task: this.taskText }) });
 		const actions = this.contentEl.createDiv({ cls: 'dashboard-reminder-actions' });
 		actions.createEl('button', { text: t('reminder.snooze') }).addEventListener('click', () => {

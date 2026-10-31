@@ -6,36 +6,9 @@ export interface DashboardSettings {
 	openDashboardOnStartup: boolean;
 	recentDocCount: number;
 	language: Language;
+	/** @deprecated Retained only so older settings files deserialize safely. */
 	stylePreset: string;
-	widgetWeatherEnabled: boolean;
-	widgetWeatherCity: string;
-	widgetWeatherLat: number;
-	widgetWeatherLon: number;
-	pomodoroEnabled: boolean;
-	pomodoroWorkMinutes: number;
-	pomodoroShortBreakMinutes: number;
-	pomodoroLongBreakMinutes: number;
-	pomodoroLongBreakInterval: number;
-	pomodoroAutoStartBreak: boolean;
-	pomodoroSoundEnabled: boolean;
-	widgetLunarEnabled: boolean;
-	widgetOrder: string[];
-	countdownEnabled: boolean;
-	countdowns: CountdownItem[];
-	countdownTargetDate: string;
-	countdownDisplayMode: 'days' | 'hours' | 'minutes';
-	countdownReminderDays: number;
-	countdownLabel: string;
-	readingEnabled: boolean;
-	readingSoundEnabled: boolean;
 	taskTemplates: TaskTemplate[];
-}
-
-export interface CountdownItem {
-	id: string;
-	targetDate: string;
-	displayMode: 'days' | 'hours' | 'minutes';
-	label: string;
 }
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
@@ -45,27 +18,6 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	recentDocCount: 5,
 	language: 'en',
 	stylePreset: 'default',
-	widgetWeatherEnabled: false,
-	widgetWeatherCity: 'Shanghai',
-	widgetWeatherLat: 31.23,
-	widgetWeatherLon: 121.47,
-	pomodoroEnabled: true,
-	pomodoroWorkMinutes: 25,
-	pomodoroShortBreakMinutes: 5,
-	pomodoroLongBreakMinutes: 15,
-	pomodoroLongBreakInterval: 4,
-	pomodoroAutoStartBreak: true,
-	pomodoroSoundEnabled: true,
-	widgetLunarEnabled: true,
-	widgetOrder: ['weather', 'lunar', 'pomodoro', 'reading', 'countdown'],
-	countdownEnabled: false,
-	countdowns: [],
-	countdownTargetDate: '',
-	countdownDisplayMode: 'days',
-	countdownReminderDays: 0,
-	countdownLabel: '',
-	readingEnabled: false,
-	readingSoundEnabled: true,
 	taskTemplates: [],
 };
 
@@ -109,19 +61,6 @@ export interface WeatherConfig {
 	cityName: string;
 }
 
-export interface WeatherData {
-	temperature: number;
-	weatherCode: number;
-	windSpeed: number;
-	humidity: number;
-	feelsLike: number;
-	dailyMax: number[];
-	dailyMin: number[];
-	dailyCodes: number[];
-	dailyDates: string[];
-	fetchedAt: number;
-}
-
 export type TrackerStyle = 'line' | 'heatmap' | 'bar';
 
 export interface TrackerConfig {
@@ -150,6 +89,8 @@ export interface TaskTemplate {
 export type CardSize = 'S' | 'M' | 'L';
 
 export interface DashboardCard {
+	/** Opaque legacy weather block; never rendered or edited. */
+	legacyMarkdown?: string;
 	id: string;
 	title: string;
 	type: CardType;
@@ -211,6 +152,19 @@ export interface DashboardColumn {
 	libraryConfig?: LibraryConfig;
 	heatmapItems?: HeatmapItem[];
 	heatmapLayout?: 'column' | 'row';
+	todoSources?: TodoSourceConfig;
+}
+
+export interface TodoSourceOptions {
+	enabled: boolean;
+	pathTemplate: string;
+	heading: string;
+	createCommandId: string;
+}
+
+export interface TodoSourceConfig {
+	monthly: TodoSourceOptions;
+	daily: TodoSourceOptions;
 }
 
 export interface DashboardData {
@@ -221,7 +175,15 @@ export interface DashboardData {
 	columns: DashboardColumn[];
 }
 
+export type DashboardUpdate =
+	| { scope: 'full'; reason: 'initial' | 'external' | 'settings' | 'structure' | 'mixed' }
+	| { scope: 'columns'; columnNames: string[] }
+	| { scope: 'quick-actions' }
+	| { scope: 'banner' };
+
 export interface RenderCallbacks {
+	onTodoSourcesConfigure(columnName: string): void;
+	onTodoSourcesMount(container: HTMLElement, column: DashboardColumn): void;
 	onCardEdit(card: DashboardCard): void;
 	onCardDelete(cardId: string): void;
 	onCardArchive(cardId: string): void;

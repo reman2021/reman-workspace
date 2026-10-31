@@ -1,8 +1,10 @@
 import { App, Modal, setIcon } from 'obsidian';
 import type { QuickAction } from './types';
+import { getCommands } from './internal-api';
+import { renderFileSearch } from './file-search';
 import { PRESET_ACTIONS } from './types';
 import { t } from './i18n';
-import { inheritDashboardThemeVars } from './theme-utils';
+import { initializeDashboardModal } from './theme-utils';
 
 function actionKey(action: QuickAction, isPreset: boolean): string {
 	return isPreset ? `p:${action.target}` : `c:${action.target}`;
@@ -47,6 +49,7 @@ export function renderQuickActions(
 	onReorder?: (order: string[]) => void,
 	onRemoveByKey?: (key: string) => void,
 	hiddenPresets?: string[],
+	search?: { app: App; onOpen: (path: string) => void },
 ): void {
 	const section = container.createDiv({ cls: 'dashboard-section dashboard-quick-actions' });
 
@@ -55,7 +58,15 @@ export function renderQuickActions(
 
 	const btnGroup = header.createDiv({ cls: 'dashboard-qa-btn-group' });
 
-	// Pin button (left of add button)
+	const addBtn = btnGroup.createEl('button', {
+		cls: 'dashboard-qa-add-btn',
+		attr: { 'aria-label': t('quickActions.addAction') },
+	});
+	setIcon(addBtn, 'plus');
+	addBtn.addEventListener('click', onAdd);
+
+	// Pin button (right of add button)
+
 	if (onTogglePin) {
 		let pinned = initialPinned ?? false;
 		const pinBtn = btnGroup.createEl('button', {
@@ -75,13 +86,8 @@ export function renderQuickActions(
 		});
 	}
 
-	const addBtn = btnGroup.createEl('button', {
-		cls: 'dashboard-qa-add-btn',
-		attr: { 'aria-label': t('quickActions.addAction') },
-	});
-	setIcon(addBtn, 'plus');
-	addBtn.addEventListener('click', onAdd);
 
+	if (search) renderFileSearch(section, search.app, search.onOpen);
 	const list = section.createDiv({ cls: 'dashboard-qa-list' });
 
 	const ordered = buildOrderedActions(actions, order, hiddenPresets);
@@ -137,7 +143,7 @@ export function renderQuickActions(
 		if (!targetKey || targetKey === draggedKey) return;
 
 		// Build new order from current DOM order with the swap
-		const items = Array.from(list.querySelectorAll('.dashboard-qa-item')) as HTMLElement[];
+		const items = Array.from(list.querySelectorAll<HTMLElement>('.dashboard-qa-item'));
 		const currentKeys = items.map(el => el.dataset.qaKey ?? '');
 		const fromIdx = currentKeys.indexOf(draggedKey);
 		const toIdx = currentKeys.indexOf(targetKey);
@@ -180,7 +186,7 @@ export function renderQuickActions(
 		item.setAttribute('role', 'button');
 
 		// DnD events
-		item.addEventListener('dragstart', (e) => onDragStart(e as DragEvent, key));
+		item.addEventListener('dragstart', (e) => onDragStart(e, key));
 		item.addEventListener('dragend', onDragEnd);
 		item.addEventListener('dragover', onDragOver);
 		item.addEventListener('dragleave', onDragLeave);
@@ -201,7 +207,7 @@ export class AddActionModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.addClass('dashboard-modal');
-		inheritDashboardThemeVars(contentEl);
+		initializeDashboardModal(this);
 		contentEl.createEl('h2', { text: t('quickActions.addAction') });
 
 		const tabBar = contentEl.createDiv({ cls: 'dashboard-action-tabs' });
@@ -286,8 +292,7 @@ export class AddActionModal extends Modal {
 	}
 
 	private renderCommandResults(container: HTMLElement, q: string): void {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const commands = (this.app as any).commands.commands as Record<string, { name?: string }>;
+		const commands = getCommands(this.app)?.commands;
 
 		if (!commands) {
 			container.createDiv({ cls: 'dashboard-docsearch-hint', text: t('quickActions.noResults') });
@@ -345,7 +350,7 @@ export class DocSearchModal extends Modal {
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.addClass('dashboard-modal');
-		inheritDashboardThemeVars(contentEl);
+		initializeDashboardModal(this);
 		contentEl.createEl('h2', { text: t('quickActions.fileTab') });
 
 		const searchWrap = contentEl.createDiv({ cls: 'dashboard-docsearch' });

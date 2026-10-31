@@ -1,3 +1,5 @@
+import { parseTodoSources } from './todo-source';
+import { formatValue } from './value-utils';
 import type {
 	BannerData,
 	CardType,
@@ -12,9 +14,8 @@ import type {
 	LibraryConfig,
 } from './types';
 import { parse as parseYaml } from 'yaml';
-import { t } from './i18n';
 
-const KNOWN_METADATA_KEYS = new Set(['id', 'link', 'progress', 'due', 'streak', 'type', 'color', 'cover', 'archived', 'archivedAt', 'width', 'size', 'lat', 'lon', 'city', 'track', 'days', 'cols', 'rows', 'gcol', 'grow']);
+const KNOWN_METADATA_KEYS = new Set(['id', 'link', 'progress', 'due', 'streak', 'type', 'color', 'cover', 'archived', 'archivedAt', 'width', 'size', 'lat', 'lon', 'city', 'track', 'days', 'cols', 'rows', 'gcol', 'grow', 'style']);
 
 const REMINDER_REGEX = /\s*⏰\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*$/;
 
@@ -109,6 +110,14 @@ export function serialize(data: DashboardData): string {
 		if (col.sectionType) {
 			lines.push(`    type: ${col.sectionType}`);
 		}
+		if (col.todoSources) {
+			lines.push('    todoSources:');
+			for (const kind of ['monthly', 'daily'] as const) {
+				const source = col.todoSources[kind];
+				lines.push(`      ${kind}:`, `        enabled: ${source.enabled}`);
+				for (const key of ['pathTemplate', 'heading', 'createCommandId'] as const) lines.push(`        ${key}: "${escapeYamlString(source[key])}"`);
+			}
+		}
 		if (col.sectionType === 'heatmap') {
 			lines.push(`    heatmapLayout: ${col.heatmapLayout ?? 'column'}`);
 			if (col.heatmapItems && col.heatmapItems.length > 0) {
@@ -165,9 +174,13 @@ export function serialize(data: DashboardData): string {
 		lines.push(`## ${column.name}`);
 		lines.push('');
 
-		if (column.sectionType === 'library') continue;
+
 
 		for (const card of column.cards) {
+			if (card.type === 'weather' && card.legacyMarkdown) {
+				lines.push(card.legacyMarkdown, '');
+				continue;
+			}
 			lines.push(`### ${card.title}`);
 
 			if (card.id) {
@@ -178,8 +191,8 @@ export function serialize(data: DashboardData): string {
 				lines.push(`type: task`);
 			}
 
-			if (card.type === 'project') {
-				lines.push(`type: project`);
+			if (card.type === 'project' || card.type === 'tracker') {
+				lines.push(`type: ${card.type}`);
 			}
 
 			if (card.wikiLink) {
@@ -244,6 +257,7 @@ export function serialize(data: DashboardData): string {
 			const tc = card.trackerConfig;
 			lines.push(`track: ${tc.key}`);
 			lines.push(`days: ${tc.days}`);
+			lines.push(`style: ${tc.style}`);
 		}
 
 			if (card.blockquote) {
@@ -274,268 +288,25 @@ export function serialize(data: DashboardData): string {
 }
 
 export function generateDefaultMarkdown(): string {
-	const today = new Date();
-	const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+	return `---
+dashboard: true
+banner:
+  quote: ""
+  author: ""
+quickActions: []
+columns:
+  - name: Memo
+    color: "#f59e0b"
+    type: memo
+  - name: Todo
+    color: "#6366f1"
+    type: todo
+---
 
-	return serialize({
-		banner: DEFAULT_BANNER,
-		quickActions: [],
-		columns: [
-			{
-				name: 'Memo',
-				color: '#f59e0b',
-				sectionType: 'memo',
-				cards: [
-					{
-						id: 'demo-memo-1',
-						title: t('default.memoTitle', { date: dateStr }),
-						type: 'generic' as CardType,
-						column: 'Memo',
-						body: t('default.memoBody'),
-						tasks: [],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-					{
-						id: 'demo-memo-path',
-						title: t('default.memoPathTitle'),
-						type: 'generic' as CardType,
-						column: 'Memo',
-						body: t('default.memoPathBody'),
-						tasks: [],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-					{
-						id: 'demo-memo-delete',
-						title: t('default.memoDeleteTitle'),
-						type: 'generic' as CardType,
-						column: 'Memo',
-						body: t('default.memoDeleteBody'),
-						tasks: [],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-				],
-			},
-			{
-				name: 'Todo',
-				color: '#6366f1',
-				sectionType: 'todo',
-				cards: [
-					{
-						id: 'demo-todo-1',
-						title: t('default.todoTitle1'),
-						type: 'task' as CardType,
-						column: 'Todo',
-						body: '',
-						tasks: [
-							{ text: t('default.todo1'), checked: false },
-							{ text: t('default.todo3'), checked: false },
-							{ text: t('default.todo4'), checked: false },
-						],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-					{
-						id: 'demo-todo-2',
-						title: t('default.todoTitle2'),
-						type: 'task' as CardType,
-						column: 'Todo',
-						body: '',
-						tasks: [
-							{ text: t('default.guide1'), checked: false },
-							{ text: t('default.guide2'), checked: false },
-							{ text: t('default.guide3'), checked: false },
-							{ text: t('default.guide4'), checked: false },
-						],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-				],
-			},
-			{
-				name: 'Projects',
-				color: '#10b981',
-				sectionType: 'projects',
-				cards: [
-					{
-						id: 'demo-project-1',
-						title: t('default.projectTitle'),
-						type: 'project' as CardType,
-						column: 'Projects',
-						body: '',
-						tasks: [],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-				],
-			},
-			{
-				name: 'Library',
-				color: '#8b5cf6',
-				sectionType: 'projects',
-				cards: [
-					{
-						id: 'demo-lib-reading',
-						title: 'Reading',
-						type: 'project' as CardType,
-						column: 'Library',
-						body: '',
-						tasks: [],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-					{
-						id: 'demo-lib-toread',
-						title: 'To Read',
-						type: 'project' as CardType,
-						column: 'Library',
-						body: '',
-						tasks: [],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-					{
-						id: 'demo-lib-done',
-						title: 'Done',
-						type: 'project' as CardType,
-						column: 'Library',
-						body: '',
-						tasks: [],
-						url: '',
-						wikiLink: '',
-						progress: -1,
-						streak: 0,
-						dueDate: '',
-						blockquote: '',
-						color: '',
-						coverImage: '',
-						archived: false,
-						archivedAt: '',
-						width: 0,
-					size: 'M' as CardSize,
-					gridCols: 0,
-					gridRows: 0,
-					gridCol: 0,
-					gridRow: 0,
-					},
-				],
-			},
-		],
-	});
+## Memo
+
+## Todo
+`;
 }
 
 function splitFrontmatter(markdown: string): { frontmatter: Record<string, unknown>; body: string } {
@@ -571,7 +342,7 @@ function parseBanner(fm: Record<string, unknown>): BannerData {
 	const imagesRaw = raw.images;
 	let images: string[] | undefined;
 	if (Array.isArray(imagesRaw)) {
-		images = (imagesRaw as unknown[]).map((item: unknown) => String(item)).filter((s: string) => s.trim());
+		images = (imagesRaw as unknown[]).map((item: unknown) => formatValue(item)).filter((s: string) => s.trim());
 	}
 
 	return {
@@ -588,10 +359,10 @@ function parseBanner(fm: Record<string, unknown>): BannerData {
 function parseQuickActions(fm: Record<string, unknown>): QuickAction[] {
 	const rawActions = fm.quickActions;
 	if (Array.isArray(rawActions)) {
-		return rawActions.map((item: Record<string, string>) => ({
+		return rawActions.map<QuickAction>((item: Record<string, string>) => ({
 			name: item.name ?? '',
 			icon: item.icon ?? (item.type === 'command' ? 'terminal' : 'file-text'),
-			type: (item.type === 'command' ? 'command' : 'file') as 'file' | 'command',
+			type: (item.type === 'command' ? 'command' : 'file'),
 			target: item.target ?? '',
 		})).filter(a => a.name && a.target);
 	}
@@ -613,7 +384,7 @@ function parseQuickActions(fm: Record<string, unknown>): QuickAction[] {
 function parseQuickActionOrder(fm: Record<string, unknown>): string[] | undefined {
 	const raw = fm.quickActionOrder;
 	if (Array.isArray(raw) && raw.length > 0) {
-		return raw.map((v: unknown) => String(v));
+		return raw.map((v: unknown) => formatValue(v));
 	}
 	return undefined;
 }
@@ -621,19 +392,20 @@ function parseQuickActionOrder(fm: Record<string, unknown>): string[] | undefine
 function parseHiddenPresets(fm: Record<string, unknown>): string[] | undefined {
 	const raw = fm.hiddenPresets;
 	if (Array.isArray(raw) && raw.length > 0) {
-		return raw.map((v: unknown) => String(v));
+		return raw.map((v: unknown) => formatValue(v));
 	}
 	return undefined;
 }
 
-function parseColumnDefs(fm: Record<string, unknown>): Array<{ name: string; color: string; sectionType?: string; libraryConfig?: LibraryConfig; heatmapItems?: import('./types').HeatmapItem[]; heatmapLayout?: 'column' | 'row' }> {
+function parseColumnDefs(fm: Record<string, unknown>): Array<{ name: string; color: string; sectionType?: string; libraryConfig?: LibraryConfig; heatmapItems?: import('./types').HeatmapItem[]; heatmapLayout?: 'column' | 'row'; todoSources?: import('./types').TodoSourceConfig }> {
 	const raw = fm.columns;
 	if (!Array.isArray(raw)) return DEFAULT_COLUMNS;
 
 	return (raw as Array<Record<string, unknown>>).map(item => ({
-			name: String(item.name ?? 'Unnamed'),
-			color: String(item.color ?? '#6366f1'),
-			sectionType: item.type ? String(item.type) : undefined,
+			name: formatValue(item.name ?? 'Unnamed'),
+			color: formatValue(item.color ?? '#6366f1'),
+			sectionType: item.type ? normalizeSectionType(formatValue(item.type)) : undefined,
+		todoSources: parseTodoSources(item.todoSources),
 		libraryConfig: item.library ? parseLibraryConfig(item.library as Record<string, unknown>) : undefined,
 		heatmapItems: item.heatmapItems ? parseHeatmapItems(item.heatmapItems as Array<Record<string, unknown>>) : undefined,
 		heatmapLayout: item.heatmapLayout === 'row' ? 'row' : 'column',
@@ -642,15 +414,15 @@ function parseColumnDefs(fm: Record<string, unknown>): Array<{ name: string; col
 
 function parseHeatmapItems(raw: Array<Record<string, unknown>>): import('./types').HeatmapItem[] {
 	return raw.map(item => ({
-		id: String(item.id ?? ''),
-		key: String(item.key ?? ''),
-		label: String(item.label ?? item.key ?? ''),
+		id: formatValue(item.id ?? ''),
+		key: formatValue(item.key ?? ''),
+		label: formatValue(item.label ?? item.key ?? ''),
 		days: typeof item.days === 'number' ? item.days : 30,
-		color: item.color ? String(item.color) : undefined,
+		color: item.color ? formatValue(item.color) : undefined,
 	})).filter(item => item.id && item.key);
 }
 
-function parseColumns(body: string, defs: Array<{ name: string; color: string; sectionType?: string; libraryConfig?: LibraryConfig; heatmapItems?: import('./types').HeatmapItem[]; heatmapLayout?: 'column' | 'row' }>): DashboardColumn[] {
+function parseColumns(body: string, defs: Array<{ name: string; color: string; sectionType?: string; libraryConfig?: LibraryConfig; heatmapItems?: import('./types').HeatmapItem[]; heatmapLayout?: 'column' | 'row'; todoSources?: import('./types').TodoSourceConfig }>): DashboardColumn[] {
 	const sections = splitByH2(body);
 	const defMap = new Map(defs.map(d => [d.name, d]));
 	const usedDefIndices = new Set<number>();
@@ -671,6 +443,7 @@ function parseColumns(body: string, defs: Array<{ name: string; color: string; s
 			sectionType: resolveSectionType(section.heading, cards, def?.sectionType),
 			cards,
 			libraryConfig: def?.libraryConfig,
+			todoSources: def?.todoSources,
 			heatmapItems: def?.heatmapItems,
 			heatmapLayout: def?.heatmapLayout,
 		};
@@ -682,13 +455,13 @@ function resolveSectionType(
 	cards: DashboardCard[],
 	fallback?: string,
 ): string {
-	if (fallback) return fallback;
+	if (fallback) return normalizeSectionType(fallback);
 
 	const lower = name.toLowerCase();
 	if (lower === 'memo') return 'memo';
 	if (lower === 'todo') return 'todo';
 	if (lower === 'projects') return 'projects';
-	if (lower === 'notes') return 'notes';
+	if (lower === 'notes') return 'projects';
 	if (lower === 'dashboard') return 'dashboard';
 	if (lower === 'library') return 'library';
 
@@ -705,17 +478,21 @@ function resolveSectionType(
 	return 'projects';
 }
 
+function normalizeSectionType(sectionType: string): string {
+	return sectionType === 'notes' ? 'projects' : sectionType;
+}
+
 function parseLibraryConfig(raw: Record<string, unknown>): LibraryConfig {
 	const filters: import('./types').PropertyFilter[] = [];
 	const rawFilters = raw.filters;
 	if (Array.isArray(rawFilters)) {
 		for (const item of rawFilters) {
 			const rec = item as Record<string, unknown>;
-			const property = String(rec.property ?? '');
+			const property = formatValue(rec.property ?? '');
 			const rawValues = rec.values;
-			const values = Array.isArray(rawValues) ? rawValues.map((v: unknown) => String(v)) : [];
-			const dateStart = rec.dateStart ? String(rec.dateStart) : '';
-			const dateEnd = rec.dateEnd ? String(rec.dateEnd) : '';
+			const values = Array.isArray(rawValues) ? rawValues.map((v: unknown) => formatValue(v)) : [];
+			const dateStart = rec.dateStart ? formatValue(rec.dateStart) : '';
+			const dateEnd = rec.dateEnd ? formatValue(rec.dateEnd) : '';
 			const dateRange = (dateStart || dateEnd) ? { start: dateStart, end: dateEnd } : undefined;
 			filters.push({ property, values, dateRange });
 		}
@@ -723,15 +500,15 @@ function parseLibraryConfig(raw: Record<string, unknown>): LibraryConfig {
 
 	return {
 		filters,
-		viewMode: (['grid', 'list', 'table', 'kanban'].includes(String(raw.viewMode ?? '')) ? raw.viewMode : 'grid') as import('./types').LibraryViewMode,
-		sortBy: String(raw.sortBy ?? 'modified'),
+		viewMode: (['grid', 'list', 'table', 'kanban'].includes(formatValue(raw.viewMode ?? '')) ? raw.viewMode : 'grid') as import('./types').LibraryViewMode,
+		sortBy: formatValue(raw.sortBy ?? 'modified'),
 		sortDesc: raw.sortDesc !== false,
-		kanbanGroupBy: raw.kanbanGroupBy ? String(raw.kanbanGroupBy) : undefined,
+		kanbanGroupBy: raw.kanbanGroupBy ? formatValue(raw.kanbanGroupBy) : undefined,
 		pageSize: typeof raw.pageSize === 'number' ? raw.pageSize : undefined,
 			quickDateFilter: raw.quickDateFilter && typeof raw.quickDateFilter === 'object' ? {
 				property: (raw.quickDateFilter as Record<string, unknown>).property === 'modified' ? 'modified' as const : 'created' as const,
-				start: String((raw.quickDateFilter as Record<string, unknown>).start ?? ''),
-				end: String((raw.quickDateFilter as Record<string, unknown>).end ?? ''),
+				start: formatValue((raw.quickDateFilter as Record<string, unknown>).start ?? ''),
+				end: formatValue((raw.quickDateFilter as Record<string, unknown>).end ?? ''),
 			} : undefined,
 		};
 	}
@@ -763,30 +540,15 @@ function parseCards(content: string, columnName: string): DashboardCard[] {
 	return blocks.map(block => parseCard(block, columnName));
 }
 
-function splitByH3(content: string): Array<{ title: string; body: string }> {
-	const lines = content.split('\n');
-	const blocks: Array<{ title: string; body: string }> = [];
-	let current: { title: string; lines: string[] } | null = null;
-
-	for (const line of lines) {
-		if (line.startsWith('### ')) {
-			if (current) {
-				blocks.push({ title: current.title, body: current.lines.join('\n').trim() });
-			}
-			current = { title: line.slice(4).trim(), lines: [] };
-		} else if (current) {
-			current.lines.push(line);
-		}
-	}
-
-	if (current) {
-		blocks.push({ title: current.title, body: current.lines.join('\n').trim() });
-	}
-
-	return blocks;
+function splitByH3(content: string): Array<{ title: string; body: string; rawMarkdown: string }> {
+	const headings = Array.from(content.matchAll(/^### (.+)\r?$/gm));
+	return headings.map((heading, index) => {
+		const rawMarkdown = content.slice(heading.index, headings[index + 1]?.index ?? content.length).trimEnd();
+		return { title: heading[1]!.trim(), body: rawMarkdown.slice(heading[0].length).trim(), rawMarkdown };
+	});
 }
 
-function parseCard(block: { title: string; body: string }, columnName: string): DashboardCard {
+function parseCard(block: { title: string; body: string; rawMarkdown: string }, columnName: string): DashboardCard {
 	const { metadata, tasks, blockquote, cleanBody } = extractCardParts(block.body);
 	const cardType = detectCardType(tasks, blockquote, metadata);
 	const weatherConfig = cardType === 'weather' ? parseWeatherConfig(metadata) : undefined;
@@ -815,6 +577,7 @@ function parseCard(block: { title: string; body: string }, columnName: string): 
 		gridRows: parseInt(metadata.rows ?? '0', 10) || 0,
 		gridCol: parseInt(metadata.gcol ?? '0', 10) || 0,
 		gridRow: parseInt(metadata.grow ?? '0', 10) || 0,
+		legacyMarkdown: cardType === 'weather' ? block.rawMarkdown : undefined,
 			weatherConfig,
 			trackerConfig,
 	};

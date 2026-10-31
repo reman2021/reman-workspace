@@ -1,32 +1,37 @@
+import { TodoSourceController } from './todo-source-controller';
+import { TodoSourceConfigModal } from './todo-source-config-modal';
+import { handleAsync } from './async-utils';
+import { getCommands } from './internal-api';
 import { ItemView, Notice, setIcon, WorkspaceLeaf, TFile, Events } from 'obsidian';
 import type DashboardPlugin from './main';
-import type { DashboardData, DashboardCard, QuickAction, BannerData, WeatherConfig, TrackerConfig, LibraryConfig } from './types';
+import type { DashboardData, DashboardCard, DashboardUpdate, QuickAction, BannerData, LibraryConfig } from './types';
 import { SyncEngine } from './sync';
-import { renderDashboard, destroyAllCharts, renderSidebarWidgets, renderSidebarWeekCalendar, renderSidebarPomodoro, renderSidebarReading } from './renderer';
+import { renderDashboard, renderDashboardSection, destroyAllCharts, destroyChartsIn, renderSidebarWeekCalendar } from './renderer';
 import { renderBanner, BannerEditModal, resolveVaultImage } from './banner';
 import { getRecentDocs, renderRecentDocs } from './recent';
 import { renderQuickActions, AddActionModal, DocSearchModal } from './quick-actions';
 import { CardEditModal } from './card-edit-modal';
 import { showConfirmDialog } from './confirm-dialog';
-import { clearWeatherCache } from './weather-service';
-import { renderSidebarLunarWidget, loadHolidayData } from './lunar-widget';
-import type { HolidayInfo } from './holiday-service';
-import { WidgetTypeModal, type WidgetType } from './widget-type-modal';
-import { WeatherConfigModal } from './weather-config-modal';
 import { LibraryConfigModal } from './library-config-modal';
 import { TrackerConfigModal } from './tracker-config-modal';
 import { HeatmapConfigModal } from './heatmap-config-modal';
-import type { HeatmapItem } from './types';
 import { TemplatePickerModal } from './template-modal';
-import { PomodoroService } from './pomodoro-service';
-import { ReadingService } from './reading-service';
 import { ReminderNoticeModal } from './reminder-notice';
 import { t } from './i18n';
-import { getObsidianThemeMode, normalizeStylePreset } from './theme-options';
+import {
+	DASHBOARD_ROOT_CLASS,
+	LEGACY_DASHBOARD_ROOT_CLASS,
+	DASHBOARD_VIEW_TYPE,
+	SIDEBAR_PINNED_STORAGE_KEY,
+	LEGACY_SIDEBAR_PINNED_STORAGE_KEY,
+	BANNER_COLLAPSED_STORAGE_KEY,
+	LEGACY_BANNER_COLLAPSED_STORAGE_KEY,
+} from './identity';
 
-export const DASHBOARD_VIEW_TYPE = 'apex-dashboard-view';
+export { DASHBOARD_VIEW_TYPE, LEGACY_DASHBOARD_VIEW_TYPE } from './identity';
 
 export class DashboardView extends ItemView {
+	private sourceControllers = new Map<string, TodoSourceController>();
 	private plugin: DashboardPlugin;
 	private sync: SyncEngine;
 	private data: DashboardData | null = null;
@@ -44,29 +49,33 @@ export class DashboardView extends ItemView {
 	private static readonly BANNER_QUOTE_OFFSET_MS = 60 * 60 * 1000; // offset by 1 hour from image
 	private reminderTimer: ReturnType<typeof setInterval> | null = null;
 	private firedReminders = new Set<string>();
-	private sidebarPinned = localStorage.getItem('apex-dashboard-sidebar-pinned') === 'true';
+	private sidebarPinned = (this.app.loadLocalStorage(SIDEBAR_PINNED_STORAGE_KEY)
+		?? window.localStorage.getItem(SIDEBAR_PINNED_STORAGE_KEY)
+		?? this.app.loadLocalStorage(LEGACY_SIDEBAR_PINNED_STORAGE_KEY)
+		?? this.app.loadLocalStorage('sidebar-pinned')
+		?? window.localStorage.getItem(LEGACY_SIDEBAR_PINNED_STORAGE_KEY)) === 'true';
 	private sidebarExpanded = false;
-	private bannerCollapsed = localStorage.getItem('apex-dashboard-banner-collapsed') === 'true';
+	private bannerCollapsed = (this.app.loadLocalStorage(BANNER_COLLAPSED_STORAGE_KEY)
+		?? window.localStorage.getItem(BANNER_COLLAPSED_STORAGE_KEY)
+		?? this.app.loadLocalStorage(LEGACY_BANNER_COLLAPSED_STORAGE_KEY)
+		?? this.app.loadLocalStorage('banner-collapsed')
+		?? window.localStorage.getItem(LEGACY_BANNER_COLLAPSED_STORAGE_KEY)) === 'true';
 	private pendingScrollCardId: string | null = null;
 	private pendingScrollToLastCardOfColumn: string | null = null;
-	private pomodoroService: PomodoroService | null = null;
-	private readingService: ReadingService | null = null;
-	private holidayData: Record<string, HolidayInfo> = {};
-	private mobileWidgetExpanded: 'pomodoro' | 'reading' | 'lunar' | null = null;
-	private mobileWidgetTabsOpen: boolean = false;
-	private static readonly WEATHER_REFRESH_MS = 30 * 60 * 1000; // 30 minutes
-	private weatherRefreshTimer: ReturnType<typeof setInterval> | null = null;
 	private preserveBannerOnNextRender = false;
+	private sourceControllersMountedInRender: Set<string> | null = null;
+	private readonly viewType: string;
 
-	constructor(leaf: WorkspaceLeaf, plugin: DashboardPlugin) {
+	constructor(leaf: WorkspaceLeaf, plugin: DashboardPlugin, viewType = DASHBOARD_VIEW_TYPE) {
 		super(leaf);
 		this.plugin = plugin;
+		this.viewType = viewType;
 		const backupDir = `${this.app.vault.configDir}/plugins/${this.plugin.manifest.id}/backups`;
 		this.sync = new SyncEngine(this.app, this.plugin.settings, backupDir);
 	}
 
 	getViewType(): string {
-		return DASHBOARD_VIEW_TYPE;
+		return this.viewType;
 	}
 
 	getDisplayText(): string {
@@ -79,32 +88,18 @@ export class DashboardView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		this.sync.updateSettings(this.plugin.settings);
-		this.sync.onDataUpdate((data) => this.render(data));
+		this.sync.onDataUpdate((data, update) => this.applyDataUpdate(data, update));
 
 		await this.sync.init();
 		this.registerVaultListeners();
 		this.startReminderChecker();
-		this.startWeatherRefresh();
-		this.pomodoroService = new PomodoroService(this.plugin);
-		await this.pomodoroService.loadSessions();
-		this.readingService = new ReadingService(this.plugin);
-		await this.readingService.loadSessions();
-		loadHolidayData().then(data => {
-			this.holidayData = data;
-			const currentData = this.sync.getData();
-			if (currentData) this.render(currentData);
-		});
+
 	}
 
 	async onClose(): Promise<void> {
 		this.runCleanup();
 		this.unregisterVaultListeners();
 		this.stopReminderChecker();
-		this.stopWeatherRefresh();
-		this.pomodoroService?.destroy();
-		this.pomodoroService = null;
-		this.readingService?.destroy();
-		this.readingService = null;
 		this.sync.destroy();
 	}
 
@@ -117,142 +112,188 @@ export class DashboardView extends ItemView {
 	}
 
 	addSection(): void {
-		const name = prompt(t('renderer.sectionName'));
-		if (name?.trim()) {
-			this.sync.addColumn(name.trim());
+		this.containerEl.querySelector<HTMLElement>('.dashboard-add-section')?.click();
+	}
+
+	private applyDataUpdate(data: DashboardData, update: DashboardUpdate): void {
+		if (this.getDashboardRoot()) {
+			if (update.scope === 'columns') {
+				this.renderUpdatedColumns(data, update.columnNames);
+				return;
+			}
+			if (update.scope === 'quick-actions') {
+				this.renderUpdatedQuickActions(data);
+				return;
+			}
+			if (update.scope === 'banner') {
+				this.renderUpdatedBanner(data);
+				return;
+			}
 		}
+		this.render(data);
+	}
+
+	private getDashboardRoot(): HTMLElement | null {
+		const host = this.containerEl.children[1] as HTMLElement | undefined;
+		if (!host) return null;
+		if (host.hasClass(DASHBOARD_ROOT_CLASS) || host.hasClass(LEGACY_DASHBOARD_ROOT_CLASS)) return host;
+		return host.querySelector<HTMLElement>(`:scope > .${DASHBOARD_ROOT_CLASS}, :scope > .${LEGACY_DASHBOARD_ROOT_CLASS}`);
 	}
 
 	private render(data: DashboardData): void {
+		const host = this.containerEl.children[1] as HTMLElement;
+		const previousRoot = this.getDashboardRoot();
 		const shouldPreserveBanner = this.preserveBannerOnNextRender;
 		this.preserveBannerOnNextRender = false;
-		const previousContainer = this.containerEl.children[1] as HTMLElement;
 		const preservedBanner = shouldPreserveBanner
-			? previousContainer?.querySelector('.dashboard-banner') as HTMLElement | null
+			? previousRoot?.querySelector<HTMLElement>('.dashboard-banner') ?? null
 			: null;
-		this.runCleanup(Boolean(preservedBanner));
+
+		const savedKanbanScroll = previousRoot?.querySelector<HTMLElement>('.dashboard-kanban')?.scrollTop ?? 0;
+		const savedSidebarScroll = previousRoot?.querySelector<HTMLElement>('.dashboard-sidebar-scroll')?.scrollTop ?? 0;
+		const savedCardScrolls = new Map<string, number>();
+		previousRoot?.querySelectorAll<HTMLElement>('.dashboard-section-cards').forEach((cards) => {
+			const key = cards.closest<HTMLElement>('.dashboard-section-row')?.dataset.column;
+			if (key) savedCardScrolls.set(key, cards.scrollLeft);
+		});
+		const savedTaskListScrolls = new Map<string, number>();
+		previousRoot?.querySelectorAll<HTMLElement>('.dashboard-task-list').forEach((list) => {
+			if (list.dataset.cardId) savedTaskListScrolls.set(list.dataset.cardId, list.scrollTop);
+		});
+
+		this.runCleanup(Boolean(preservedBanner), true);
 		this.data = data;
 		this.firedReminders.clear();
+		this.sourceControllersMountedInRender = new Set();
 
-		// Save scroll positions before re-render
-		const root = previousContainer;
-		const kanbanEl = root?.querySelector('.dashboard-kanban');
-		const sidebarScrollEl = root?.querySelector('.dashboard-sidebar-scroll');
-		const savedKanbanScroll = kanbanEl ? kanbanEl.scrollTop : 0;
-		const savedSidebarScroll = sidebarScrollEl ? sidebarScrollEl.scrollTop : 0;
-
-		const savedCardScrolls = new Map<string, number>();
-		root?.querySelectorAll('.dashboard-section-cards').forEach((el) => {
-			const section = (el as HTMLElement).closest('.dashboard-section-row');
-			const key = section?.getAttribute('data-column') ?? '';
-			if (key) savedCardScrolls.set(key, (el as HTMLElement).scrollLeft);
-		});
-
-		// Save per-task-list scroll positions so they survive re-render
-		const savedTaskListScrolls = new Map<string, number>();
-		root?.querySelectorAll('.dashboard-task-list').forEach((el) => {
-			const cardId = (el as HTMLElement).dataset.cardId;
-			if (cardId) savedTaskListScrolls.set(cardId, (el as HTMLElement).scrollTop);
-		});
-
-		const container = previousContainer;
-		container.empty();
-		container.addClass('apex-dashboard-root');
-		container.setAttribute('data-theme', normalizeStylePreset(this.plugin.settings.stylePreset, getObsidianThemeMode()));
+		const root = document.createElement('div');
+		root.addClass(DASHBOARD_ROOT_CLASS, LEGACY_DASHBOARD_ROOT_CLASS);
+		root.dataset.theme = 'default';
 
 		if (preservedBanner) {
-			container.appendChild(preservedBanner);
+			root.appendChild(preservedBanner);
 		} else {
-			const bannerEl = renderBanner(
-				container,
-				data.banner,
-				() => this.openBannerEditModal(data),
-				this.app,
-			);
-
+			const bannerEl = renderBanner(root, data.banner, () => this.openBannerEditModal(data), this.app);
 			this.renderMobileActions(bannerEl);
-
-			if (this.bannerCollapsed && window.innerWidth > 640) {
-				bannerEl.addClass('dashboard-banner--collapsed');
-			}
+			if (this.bannerCollapsed && window.innerWidth > 640) bannerEl.addClass('dashboard-banner--collapsed');
 			this.setupBannerBehavior(bannerEl);
 			void this.applyQuoteLibrary(data.banner, bannerEl);
-
-			// Banner quote rotation
-			if (!data.banner.quoteLibraryPath?.trim()) {
-				this.setupBannerRotation(container, data.banner);
-			}
+			this.setupBannerRotation(root, data.banner);
 		}
 
-		this.renderMobileWidgetBar(container);
-
-		const mainLayout = container.createDiv({ cls: 'dashboard-main' });
-
+		const mainLayout = root.createDiv({ cls: 'dashboard-main' });
 		const sidebar = mainLayout.createDiv({ cls: 'dashboard-sidebar' });
-		if (this.sidebarPinned) {
-			sidebar.addClass('dashboard-sidebar--pinned');
-		} else if (this.sidebarExpanded) {
-			sidebar.addClass('dashboard-sidebar--expanded');
-		} else {
-			sidebar.addClass('dashboard-sidebar--collapsed');
-		}
-		this.renderSidebar(sidebar, container);
-		this.setupSidebarBehavior(sidebar, container);
+		if (this.sidebarPinned) sidebar.addClass('dashboard-sidebar--pinned');
+		else if (this.sidebarExpanded) sidebar.addClass('dashboard-sidebar--expanded');
+		else sidebar.addClass('dashboard-sidebar--collapsed');
+		this.renderSidebar(sidebar, root);
+		this.setupSidebarBehavior(sidebar, root);
 
 		const kanban = mainLayout.createDiv({ cls: 'dashboard-kanban-wrapper' });
 		renderDashboard(kanban, data, this.createCallbacks(), this.app, this.plugin.settings);
-		// Library config event delegation
-		kanban.addEventListener('dashboard-library-config', ((e: CustomEvent) => {
-			const { columnName } = e.detail as { columnName: string };
-			this.openLibraryConfigModal(columnName);
+		for (const [name, controller] of this.sourceControllers) {
+			if (this.sourceControllersMountedInRender.has(name)) continue;
+			controller.unload();
+			this.sourceControllers.delete(name);
+		}
+		this.sourceControllersMountedInRender = null;
+		kanban.addEventListener('dashboard-library-config', ((event: CustomEvent) => {
+			this.openLibraryConfigModal((event.detail as { columnName: string }).columnName);
 		}) as EventListener);
 
+		host.removeClass(DASHBOARD_ROOT_CLASS, LEGACY_DASHBOARD_ROOT_CLASS);
+		host.removeAttribute('data-theme');
+		host.replaceChildren(root);
 
-		// Restore scroll positions
-		const newKanban = container.querySelector('.dashboard-kanban');
-		const newSidebarScroll = container.querySelector('.dashboard-sidebar-scroll');
-		if (newKanban) newKanban.scrollTop = savedKanbanScroll;
-		if (newSidebarScroll) newSidebarScroll.scrollTop = savedSidebarScroll;
-
-		container.querySelectorAll('.dashboard-section-cards').forEach((el) => {
-			const section = (el as HTMLElement).closest('.dashboard-section-row');
-			const key = section?.getAttribute('data-column') ?? '';
-			const saved = savedCardScrolls.get(key);
-			if (saved !== undefined) (el as HTMLElement).scrollLeft = saved;
+		root.querySelector<HTMLElement>('.dashboard-kanban')?.scrollTo({ top: savedKanbanScroll });
+		root.querySelector<HTMLElement>('.dashboard-sidebar-scroll')?.scrollTo({ top: savedSidebarScroll });
+		root.querySelectorAll<HTMLElement>('.dashboard-section-cards').forEach((cards) => {
+			const key = cards.closest<HTMLElement>('.dashboard-section-row')?.dataset.column;
+			const saved = key ? savedCardScrolls.get(key) : undefined;
+			if (saved !== undefined) cards.scrollLeft = saved;
 		});
-
-		// Restore per-task-list scroll positions
-		container.querySelectorAll('.dashboard-task-list').forEach((el) => {
-			const cardId = (el as HTMLElement).dataset.cardId;
-			const saved = cardId ? savedTaskListScrolls.get(cardId) : undefined;
-			if (saved !== undefined) (el as HTMLElement).scrollTop = saved;
+		root.querySelectorAll<HTMLElement>('.dashboard-task-list').forEach((list) => {
+			const saved = list.dataset.cardId ? savedTaskListScrolls.get(list.dataset.cardId) : undefined;
+			if (saved !== undefined) list.scrollTop = saved;
 		});
+		this.applyPendingScroll(root);
+	}
 
-		// Scroll to newly added card
+	private renderUpdatedColumns(data: DashboardData, columnNames: string[]): void {
+		const root = this.getDashboardRoot();
+		if (!root) { this.render(data); return; }
+		this.data = data;
+		for (const columnName of [...new Set(columnNames)]) {
+			const column = data.columns.find(item => item.name === columnName);
+			const current = Array.from(root.querySelectorAll<HTMLElement>('.dashboard-section-row'))
+				.find(section => section.dataset.column === columnName);
+			if (!column || !current) { this.render(data); return; }
+			const parent = current.parentElement;
+			if (!parent) continue;
+			const active = document.activeElement;
+			if (active instanceof HTMLElement && current.contains(active)) active.blur();
+			if (current.parentElement !== parent) continue;
+			const cardsScroll = current.querySelector<HTMLElement>('.dashboard-section-cards')?.scrollLeft ?? 0;
+			this.sourceControllers.get(columnName)?.unload();
+			this.sourceControllers.delete(columnName);
+			destroyChartsIn(current);
+			if (current.parentElement !== parent) continue;
+			const replacement = renderDashboardSection(column, this.createCallbacks(), this.app, data, this.plugin.settings);
+			if (current.parentElement !== parent) continue;
+			parent.replaceChild(replacement, current);
+			const cards = replacement.querySelector<HTMLElement>('.dashboard-section-cards');
+			if (cards) cards.scrollLeft = cardsScroll;
+		}
+		this.applyPendingScroll(root);
+	}
+
+	private renderUpdatedQuickActions(data: DashboardData): void {
+		const root = this.getDashboardRoot();
+		const sidebar = root?.querySelector<HTMLElement>('.dashboard-sidebar');
+		const current = sidebar?.querySelector<HTMLElement>('.dashboard-quick-actions');
+		if (!root || !sidebar || !current) { this.render(data); return; }
+		this.data = data;
+		const staging = document.createElement('div');
+		this.renderSidebarQuickActions(staging, sidebar);
+		const replacement = staging.firstElementChild;
+		if (!(replacement instanceof HTMLElement)) { this.render(data); return; }
+		current.replaceWith(replacement);
+		this.closeMobileDrawer();
+	}
+
+	private renderUpdatedBanner(data: DashboardData): void {
+		const root = this.getDashboardRoot();
+		const current = root?.querySelector<HTMLElement>('.dashboard-banner');
+		if (!root || !current) { this.render(data); return; }
+		this.data = data;
+		for (const fn of this.bannerCleanupFns) fn();
+		this.bannerCleanupFns = [];
+		const staging = document.createElement('div');
+		const replacement = renderBanner(staging, data.banner, () => this.openBannerEditModal(data), this.app);
+		this.renderMobileActions(replacement);
+		if (this.bannerCollapsed && window.innerWidth > 640) replacement.addClass('dashboard-banner--collapsed');
+		current.replaceWith(replacement);
+		this.setupBannerBehavior(replacement);
+		void this.applyQuoteLibrary(data.banner, replacement);
+		this.setupBannerRotation(root, data.banner);
+	}
+
+	private applyPendingScroll(root: HTMLElement): void {
 		if (this.pendingScrollCardId) {
-			const cardEl = container.querySelector(`[data-card-id="${this.pendingScrollCardId}"]`);
-			if (cardEl) {
-				requestAnimationFrame(() => {
-					cardEl.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-				});
-			}
+			const card = Array.from(root.querySelectorAll<HTMLElement>('[data-card-id]'))
+				.find(item => item.dataset.cardId === this.pendingScrollCardId);
+			if (card) requestAnimationFrame(() => card.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' }));
 			this.pendingScrollCardId = null;
 		}
 		if (this.pendingScrollToLastCardOfColumn) {
-			const colName = this.pendingScrollToLastCardOfColumn;
-			const sectionRow = container.querySelector(`[data-column="${colName}"]`);
-			if (sectionRow) {
-				const cards = sectionRow.querySelectorAll('.dashboard-card');
-				const lastCard = cards[cards.length - 1];
-				if (lastCard) {
-					requestAnimationFrame(() => {
-						lastCard.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-					});
-				}
-			}
+			const columnName = this.pendingScrollToLastCardOfColumn;
+			const section = Array.from(root.querySelectorAll<HTMLElement>('.dashboard-section-row'))
+				.find(item => item.dataset.column === columnName);
+			const cards = section?.querySelectorAll<HTMLElement>('.dashboard-card');
+			const lastCard = cards?.[cards.length - 1];
+			if (lastCard) requestAnimationFrame(() => lastCard.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' }));
 			this.pendingScrollToLastCardOfColumn = null;
 		}
-
 	}
 
 	private renderMobileActions(bannerEl: HTMLElement): void {
@@ -283,7 +324,7 @@ export class DashboardView extends ItemView {
 		if (overlay) {
 			overlay.addEventListener('click', (e) => {
 				const rect = overlay.getBoundingClientRect();
-				const tapX = (e as MouseEvent).clientX - rect.left;
+				const tapX = (e).clientX - rect.left;
 				if (tapX > rect.width * 0.5) {
 					const editBtn = overlay.querySelector('.dashboard-banner-edit-btn') as HTMLElement;
 					if (editBtn) {
@@ -291,95 +332,6 @@ export class DashboardView extends ItemView {
 					}
 				}
 			});
-		}
-	}
-
-	private renderMobileWidgetBar(container: HTMLElement): void {
-		this.mobileWidgetTabsOpen = false;
-		this.mobileWidgetExpanded = null;
-
-		const bar = container.createDiv({ cls: 'dashboard-mobile-widget-bar' });
-
-		// Thin strip: collapsed state, tap to expand tabs
-		const strip = bar.createDiv({ cls: 'dashboard-mobile-widget-strip' });
-		strip.createDiv({ cls: 'dashboard-mobile-widget-strip-hint' });
-		strip.addEventListener('click', (e) => {
-			e.stopPropagation();
-			this.mobileWidgetTabsOpen = !this.mobileWidgetTabsOpen;
-			if (!this.mobileWidgetTabsOpen) {
-				this.mobileWidgetExpanded = null;
-			}
-			this.refreshMobileWidgetPanel(bar);
-		});
-
-		// Tab row: hidden by default, revealed by tapping strip
-		const tabs = bar.createDiv({ cls: 'dashboard-mobile-widget-tabs' });
-
-		const widgets: Array<{ key: 'pomodoro' | 'reading' | 'lunar'; label: string; icon: string }> = [
-			{ key: 'pomodoro', label: t('mobile.pomodoro'), icon: 'hourglass' },
-			{ key: 'reading', label: t('mobile.reading'), icon: 'book-open' },
-			{ key: 'lunar', label: t('mobile.lunar'), icon: 'moon' },
-		];
-
-		const panel = bar.createDiv({ cls: 'dashboard-mobile-widget-panel' });
-
-		for (const w of widgets) {
-			const btn = tabs.createEl('button', {
-				cls: 'dashboard-mobile-widget-btn',
-				attr: { 'aria-label': w.label },
-			});
-			setIcon(btn, w.icon);
-
-			btn.addEventListener('click', (e) => {
-				e.stopPropagation();
-				if (this.mobileWidgetExpanded === w.key) {
-					this.mobileWidgetExpanded = null;
-				} else {
-					this.mobileWidgetExpanded = w.key;
-				}
-				this.refreshMobileWidgetPanel(bar);
-			});
-
-			btn.dataset.widgetKey = w.key;
-		}
-
-		this.refreshMobileWidgetPanel(bar);
-	}
-
-	private refreshMobileWidgetPanel(bar: HTMLElement): void {
-		const strip = bar.querySelector('.dashboard-mobile-widget-strip');
-		const tabs = bar.querySelector('.dashboard-mobile-widget-tabs');
-		const panel = bar.querySelector('.dashboard-mobile-widget-panel') as HTMLElement | null;
-		if (!strip || !tabs || !panel) return;
-
-		// Toggle strip active state
-		strip.classList.toggle('dashboard-mobile-widget-strip--active', this.mobileWidgetTabsOpen);
-
-		// Toggle tabs visibility
-		tabs.classList.toggle('dashboard-mobile-widget-tabs--open', this.mobileWidgetTabsOpen);
-
-		// Update button active states
-		tabs.querySelectorAll('.dashboard-mobile-widget-btn').forEach((btn) => {
-			const el = btn as HTMLElement;
-			el.classList.toggle('active', el.dataset.widgetKey === this.mobileWidgetExpanded);
-		});
-
-		// Render panel content
-		panel.empty();
-
-		if (!this.mobileWidgetExpanded) {
-			panel.removeClass('dashboard-mobile-widget-panel--open');
-			return;
-		}
-
-		panel.addClass('dashboard-mobile-widget-panel--open');
-
-		if (this.mobileWidgetExpanded === 'pomodoro' && this.pomodoroService) {
-			renderSidebarPomodoro(panel, this.pomodoroService, this.plugin.settings);
-		} else if (this.mobileWidgetExpanded === 'reading' && this.readingService) {
-			renderSidebarReading(panel, this.readingService);
-		} else if (this.mobileWidgetExpanded === 'lunar') {
-			renderSidebarLunarWidget(panel, this.holidayData, this.app);
 		}
 	}
 
@@ -395,7 +347,7 @@ export class DashboardView extends ItemView {
 			if (window.innerWidth <= 640) return;
 			this.bannerCollapsed = !this.bannerCollapsed;
 			bannerEl.toggleClass('dashboard-banner--collapsed', this.bannerCollapsed);
-			localStorage.setItem('apex-dashboard-banner-collapsed', String(this.bannerCollapsed));
+			this.app.saveLocalStorage(BANNER_COLLAPSED_STORAGE_KEY, String(this.bannerCollapsed));
 		});
 
 		const onResize = () => {
@@ -411,7 +363,7 @@ export class DashboardView extends ItemView {
 
 	private setupBannerRotation(container: HTMLElement, banner: BannerData): void {
 		// Quote rotation
-		const quotes = banner.quotes;
+		const quotes = banner.quoteLibraryPath?.trim() ? undefined : banner.quotes;
 		if (quotes && quotes.length > 1) {
 			// Offset by 1 hour so quote and image swaps don't overlap
 			const quoteIndex = Math.floor((Date.now() + DashboardView.BANNER_QUOTE_OFFSET_MS) / DashboardView.BANNER_QUOTE_ROTATION_MS) % quotes.length;
@@ -454,7 +406,7 @@ export class DashboardView extends ItemView {
 			if (bannerEl) {
 				const resolved = resolveVaultImage(this.app, images[imgIndex]!);
 				if (resolved) {
-					bannerEl.style.backgroundImage = `url("${resolved}")`;
+					bannerEl.setCssProps({ 'background-image': `url("${resolved}")` });
 				}
 
 				const rotateImage = () => {
@@ -466,7 +418,7 @@ export class DashboardView extends ItemView {
 
 					setTimeout(() => {
 						if (nextResolved) {
-							bannerEl.style.backgroundImage = `url("${nextResolved}")`;
+							bannerEl.setCssProps({ 'background-image': `url("${nextResolved}")` });
 						}
 						bannerEl.removeClass('dashboard-banner--fading');
 					}, 600);
@@ -487,15 +439,18 @@ export class DashboardView extends ItemView {
 			const raw = await this.app.vault.read(file);
 			const quotes = raw.split(/\r?\n/).map(parseQuoteLibraryLine).filter(item => item.quote);
 			if (quotes.length === 0) return;
-			const quoteEl = bannerEl.querySelector('.dashboard-banner-quote') as HTMLElement | null;
-			const authorEl = bannerEl.querySelector('.dashboard-banner-author') as HTMLElement | null;
+			const quoteEl = bannerEl.querySelector('.dashboard-banner-quote');
+			const authorEl = bannerEl.querySelector('.dashboard-banner-author');
 			if (!quoteEl || !authorEl) return;
-			const index = Math.floor(Date.now() / DashboardView.BANNER_QUOTE_ROTATION_MS) % quotes.length;
-			const next = quotes[index];
-			if (next) {
-				quoteEl.textContent = next.quote;
-				authorEl.textContent = next.author;
-			}
+			if (!bannerEl.isConnected) return;
+			const rotate = () => {
+				const index = Math.floor(Date.now() / DashboardView.BANNER_QUOTE_ROTATION_MS) % quotes.length;
+				const next = quotes[index];
+				if (next) { quoteEl.textContent = next.quote; authorEl.textContent = next.author; }
+			};
+			rotate();
+			const timer = setInterval(rotate, DashboardView.BANNER_QUOTE_ROTATION_MS);
+			this.bannerCleanupFns.push(() => clearInterval(timer));
 		} catch {
 			// Keep the manually configured quote as the fallback.
 		}
@@ -504,14 +459,14 @@ export class DashboardView extends ItemView {
 	private openMobileDrawer(type: 'quickActions' | 'recent'): void {
 		this.closeMobileDrawer();
 
-		const root = this.containerEl.children[1] as HTMLElement;
+		const root = this.getDashboardRoot();
 		if (!root) return;
 
 		const firstSection = root.querySelector('.dashboard-section-row') as HTMLElement;
 		const drawerTop = firstSection ? firstSection.getBoundingClientRect().top : 0;
 
 		const drawer = root.createDiv({ cls: 'dashboard-mobile-drawer' });
-		drawer.style.top = `${drawerTop}px`;
+		drawer.setCssProps({ 'top': `${drawerTop}px` });
 
 		const content = drawer.createDiv({ cls: 'dashboard-mobile-drawer-content' });
 
@@ -521,35 +476,36 @@ export class DashboardView extends ItemView {
 				renderQuickActions(
 					content,
 					this.data.quickActions,
-					(action) => { this.executeAction(action); this.closeMobileDrawer(); },
-					async (index) => {
+					(action) => { void this.executeAction(action); this.closeMobileDrawer(); },
+					handleAsync(async (index: number) => {
 						const confirmed = await showConfirmDialog(this.app, {
 							title: t('common.confirmDelete'),
 							message: t('common.confirmDeleteMessage'),
 						});
 						if (!confirmed) return;
-						this.sync.removeQuickAction(index);
-					},
+						void this.sync.removeQuickAction(index);
+					}),
 					() => this.openAddActionModal(),
 					undefined,
 					undefined,
 					this.data.quickActionOrder,
-					(order) => this.sync.reorderQuickActions(order),
-					async (key) => {
+					handleAsync((order: string[]) => this.sync.reorderQuickActions(order)),
+					handleAsync(async (key: string) => {
 						const confirmed = await showConfirmDialog(this.app, {
 							title: t('common.confirmDelete'),
 							message: t('common.confirmDeleteMessage'),
 						});
 						if (!confirmed) return;
-						this.sync.removeQuickActionByKey(key);
-					},
+						void this.sync.removeQuickActionByKey(key);
+					}),
 					this.data.hiddenPresets,
+			{ app: this.app, onOpen: path => { void this.navigateToPath(path); } },
 				);
 			}
 		} else {
 			content.createEl('h4', { text: t('mobile.recent'), cls: 'dashboard-mobile-drawer-title' });
 			const docs = getRecentDocs(this.app, this.plugin.settings.recentDocCount);
-			renderRecentDocs(content, docs, (path) => this.navigateToPath(path));
+			renderRecentDocs(content, docs, handleAsync((path: string) => this.navigateToPath(path)));
 		}
 
 		const backdrop = drawer.createDiv({ cls: 'dashboard-mobile-drawer-backdrop' });
@@ -561,7 +517,7 @@ export class DashboardView extends ItemView {
 	}
 
 	private closeMobileDrawer(): void {
-		const root = this.containerEl.children[1] as HTMLElement;
+		const root = this.getDashboardRoot();
 		if (!root) return;
 		const existing = root.querySelector('.dashboard-mobile-drawer');
 		if (existing) existing.remove();
@@ -571,35 +527,36 @@ export class DashboardView extends ItemView {
 		if (!this.data) return;
 
 		const scroll = sidebar.createDiv({ cls: 'dashboard-sidebar-scroll' });
-
 		renderSidebarWeekCalendar(scroll);
+		this.renderSidebarQuickActions(scroll, sidebar);
 
-		renderSidebarWidgets(scroll, this.plugin.settings, this.app, this.pomodoroService ?? undefined, this.readingService ?? undefined, this.holidayData, async (order) => {
-			this.plugin.settings = {
-				...this.plugin.settings,
-				widgetOrder: order,
-			};
-			await this.plugin.saveSettings();
-			this.render(this.data!);
-		});
-
-		renderQuickActions(
+		const docs = getRecentDocs(this.app, this.plugin.settings.recentDocCount);
+		renderRecentDocs(
 			scroll,
+			docs,
+			handleAsync((path: string) => this.navigateToPath(path)),
+		);
+	}
+
+	private renderSidebarQuickActions(container: HTMLElement, sidebar: HTMLElement): void {
+		if (!this.data) return;
+		renderQuickActions(
+			container,
 			this.data.quickActions,
-			(action) => this.executeAction(action),
+			handleAsync((action: QuickAction) => this.executeAction(action)),
 			(index) => {
-				showConfirmDialog(this.app, {
+				void showConfirmDialog(this.app, {
 					title: t('common.confirmDelete'),
 					message: t('common.confirmDeleteMessage'),
 				}).then(confirmed => {
-					if (confirmed) this.sync.removeQuickAction(index);
+					if (confirmed) void this.sync.removeQuickAction(index);
 				});
 			},
 			() => this.openAddActionModal(),
 			this.sidebarPinned,
 			() => {
 				this.sidebarPinned = !this.sidebarPinned;
-				localStorage.setItem('apex-dashboard-sidebar-pinned', String(this.sidebarPinned));
+				this.app.saveLocalStorage(SIDEBAR_PINNED_STORAGE_KEY, String(this.sidebarPinned));
 				if (this.sidebarPinned) {
 					sidebar.addClass('dashboard-sidebar--pinned');
 					sidebar.removeClass('dashboard-sidebar--expanded');
@@ -607,28 +564,23 @@ export class DashboardView extends ItemView {
 					this.sidebarExpanded = false;
 				} else {
 					sidebar.removeClass('dashboard-sidebar--pinned');
-					sidebar.addClass('dashboard-sidebar--collapsed');
-					this.sidebarExpanded = false;
+					sidebar.removeClass('dashboard-sidebar--collapsed');
+					sidebar.addClass('dashboard-sidebar--expanded');
+					this.sidebarExpanded = true;
 				}
 			},
 			this.data.quickActionOrder,
-			(order) => this.sync.reorderQuickActions(order),
+			handleAsync((order: string[]) => this.sync.reorderQuickActions(order)),
 			(key) => {
-				showConfirmDialog(this.app, {
+				void showConfirmDialog(this.app, {
 					title: t('common.confirmDelete'),
 					message: t('common.confirmDeleteMessage'),
 				}).then(confirmed => {
-					if (confirmed) this.sync.removeQuickActionByKey(key);
+					if (confirmed) void this.sync.removeQuickActionByKey(key);
 				});
 			},
 			this.data.hiddenPresets,
-		);
-
-		const docs = getRecentDocs(this.app, this.plugin.settings.recentDocCount);
-		renderRecentDocs(
-			scroll,
-			docs,
-			(path) => this.navigateToPath(path),
+			{ app: this.app, onOpen: path => { void this.navigateToPath(path); } },
 		);
 	}
 
@@ -663,6 +615,21 @@ export class DashboardView extends ItemView {
 
 	private createCallbacks() {
 		return {
+			onTodoSourcesConfigure: (columnName: string) => {
+				const config = this.data?.columns.find(column => column.name === columnName)?.todoSources;
+				new TodoSourceConfigModal(this.app, config, config => { void this.sync.updateTodoSources(columnName, config); }).open();
+			},
+			onTodoSourcesMount: (container: HTMLElement, column: import('./types').DashboardColumn) => {
+				this.sourceControllersMountedInRender?.add(column.name);
+				const existing = this.sourceControllers.get(column.name);
+				if (!column.todoSources?.monthly.enabled && !column.todoSources?.daily.enabled) {
+					existing?.unload(); this.sourceControllers.delete(column.name); return;
+				}
+				if (existing?.rebind(container, column.todoSources)) return;
+				existing?.unload(); this.sourceControllers.delete(column.name);
+				const controller = new TodoSourceController(this.app, container, column.todoSources);
+				this.sourceControllers.set(column.name, controller); controller.load();
+			},
 			onCardEdit: (card: DashboardCard) => this.openCardEditModal(card),
 			onCardDelete: async (cardId: string) => {
 				const confirmed = await showConfirmDialog(this.app, {
@@ -670,7 +637,7 @@ export class DashboardView extends ItemView {
 					message: t('common.confirmDeleteMessage'),
 				});
 				if (!confirmed) return;
-				this.sync.deleteCard(cardId);
+				void this.sync.deleteCard(cardId);
 				new Notice(t('card.deleted'));
 			},
 			onCardArchive: async (cardId: string) => {
@@ -680,11 +647,11 @@ export class DashboardView extends ItemView {
 					confirmText: t('renderer.archiveCard'),
 				});
 				if (!confirmed) return;
-				this.sync.archiveCard(cardId);
+				void this.sync.archiveCard(cardId);
 				new Notice(t('renderer.cardArchived'));
 			},
 			onCardRestore: (cardId: string) => {
-				this.sync.restoreCard(cardId);
+				void this.sync.restoreCard(cardId);
 				new Notice(t('renderer.cardRestored'));
 			},
 			onCheckboxToggle: (cardId: string, idx: number, checked: boolean) => this.runTaskMutation(() => this.sync.toggleTask(cardId, idx, checked)),
@@ -695,7 +662,7 @@ export class DashboardView extends ItemView {
 					message: t('common.confirmDeleteMessage'),
 				});
 				if (!confirmed) return;
-				this.runTaskMutation(() => this.sync.deleteTask(cardId, idx));
+				void this.runTaskMutation(() => this.sync.deleteTask(cardId, idx));
 			},
 			onTaskReorder: (cardId: string, from: number, to: number) => this.runTaskMutation(() => this.sync.reorderTask(cardId, from, to)),
 			onTaskMoveToCard: (srcCardId: string, taskIndex: number, destCardId: string, destIndex: number) => this.runTaskMutation(() => this.sync.moveTaskToCard(srcCardId, taskIndex, destCardId, destIndex)),
@@ -708,16 +675,16 @@ export class DashboardView extends ItemView {
 				const column = this.data?.columns.find(col => col.name === colName);
 				const effectiveType = column?.sectionType ?? colName.toLowerCase();
 				if (effectiveType === 'dashboard') {
-					this.openWidgetTypeModal(colName);
+					this.openTrackerConfigModal(colName);
 				} else if (effectiveType === 'memo' || effectiveType === 'todo') {
 					this.pendingScrollToLastCardOfColumn = colName;
-					this.sync.addCard(colName);
+					void this.sync.addCard(colName);
 				} else {
 					this.openProjectSearchModal(colName);
 				}
 			},
 				onColumnAdd: (name: string, sectionType?: string) => {
-					this.sync.addColumn(name, sectionType).then(() => {
+					void this.sync.addColumn(name, sectionType).then(() => {
 						if (sectionType === 'library') {
 							this.openLibraryConfigModal(name);
 						}
@@ -728,17 +695,17 @@ export class DashboardView extends ItemView {
 			},
 			onQuickActionAdd: () => this.openAddActionModal(),
 			onQuickActionRemove: (index: number) => {
-				showConfirmDialog(this.app, {
+				void showConfirmDialog(this.app, {
 					title: t('common.confirmDelete'),
 					message: t('common.confirmDeleteMessage'),
 				}).then(confirmed => {
-					if (confirmed) this.sync.removeQuickAction(index);
+					if (confirmed) void this.sync.removeQuickAction(index);
 				});
 			},
 			onMemoColorChange: (card: DashboardCard, color: string) => this.sync.updateMemoColor(card.id, color),
 			onProjectCoverChange: (card: DashboardCard, imagePath: string) => this.sync.updateProjectCover(card.id, imagePath),
 				onCardTitleEdit: (cardId: string, newTitle: string) => this.sync.updateCard(cardId, { title: newTitle }),
-				onCardWidthChange: (cardId: string, width: number) => this.sync.updateCardWidth(cardId, width),
+				onCardWidthChange: (cardId: string, width: number) => void this.sync.updateCardWidth(cardId, width),
 					onCardSizeChange: (cardId: string, size: string) => this.sync.updateCardSize(cardId, size as import('./types').CardSize),
 				onCardGridChange: (cardId: string, gridCols: number, gridRows: number) => this.sync.updateCardGrid(cardId, gridCols, gridRows),
 				onCardGridMove: (cardId: string, gridCol: number, gridRow: number) => this.sync.updateCardGridMove(cardId, gridCol, gridRow),
@@ -746,7 +713,7 @@ export class DashboardView extends ItemView {
 				onColumnRename: (oldName: string, newName: string) => this.sync.renameColumn(oldName, newName),
 			onTaskReminderEdit: (cardId: string, taskIndex: number, reminder: string | undefined) => this.sync.editTaskReminder(cardId, taskIndex, reminder),
 			onAddFromTemplate: (columnName: string) => this.openTemplatePicker(columnName),
-				onLibraryConfigChange: (columnName: string, config: LibraryConfig) => this.sync.updateLibraryConfig(columnName, config),
+				onLibraryConfigChange: (columnName: string, config: LibraryConfig) => this.sync.updateLibraryConfig(columnName, config, false),
 			onHeatmapAdd: (columnName: string) => this.openHeatmapConfigModal(columnName),
 			onHeatmapEdit: (columnName: string, itemId: string) => {
 				const col = this.data?.columns.find(c => c.name === columnName);
@@ -754,12 +721,12 @@ export class DashboardView extends ItemView {
 				if (item) this.openHeatmapConfigModal(columnName, item);
 			},
 			onHeatmapDelete: (columnName: string, itemId: string) => {
-				import('./confirm-dialog').then(({ showConfirmDialog }) =>
+				void import('./confirm-dialog').then(({ showConfirmDialog }) =>
 					showConfirmDialog(this.app, {
 						title: t('common.confirmDelete'),
 						message: t('common.confirmDeleteMessage'),
 					}).then(confirmed => {
-						if (confirmed) this.sync.deleteHeatmapItem(columnName, itemId);
+						if (confirmed) void this.sync.deleteHeatmapItem(columnName, itemId);
 					})
 				);
 			},
@@ -772,7 +739,7 @@ export class DashboardView extends ItemView {
 		let sectionType = 'projects';
 		let cardType = 'generic';
 		for (const col of this.data.columns) {
-			const card = col.cards.find(c => c.id === cardId);
+			const card = col.cards.find(c =>void  c.id === cardId);
 			if (card) {
 				sectionType = col.sectionType ?? col.name.toLowerCase();
 				cardType = card.type;
@@ -781,18 +748,18 @@ export class DashboardView extends ItemView {
 		}
 		if (cardType === 'weather' || cardType === 'tracker') return;
 			if (cardType === 'task' || sectionType === 'todo') {
-			this.runTaskMutation(() => this.sync.addTask(cardId, `[[${filePath}]]`));
+			void this.runTaskMutation(() => this.sync.addTask(cardId, `[[${filePath}]]`));
 		} else if (sectionType === 'memo') {
-			this.sync.addFileLinkToMemo(cardId, filePath);
+			void this.sync.addFileLinkToMemo(cardId, filePath);
 		} else {
-			this.sync.addDocToCard(cardId, filePath);
+			void this.sync.addDocToCard(cardId, filePath);
 		}
 	}
 
 	private openBannerEditModal(data: DashboardData): void {
 		const modal = new BannerEditModal(this.app, data.banner, (updates) => {
-			this.sync.updateBanner(updates);
-		}, this.plugin.settings.stylePreset);
+			void this.sync.updateBanner(updates);
+		});
 		modal.open();
 	}
 
@@ -807,41 +774,19 @@ export class DashboardView extends ItemView {
 
 	private openCardEditModal(card: DashboardCard): void {
 		const modal = new CardEditModal(this.app, card, (updates) => {
-			this.sync.updateCard(card.id, updates);
-		}, this.plugin.settings.stylePreset);
-		modal.open();
-	}
-
-	private openWidgetTypeModal(colName: string): void {
-		const modal = new WidgetTypeModal(this.app, (type: WidgetType) => {
-			if (type === 'weather') {
-				this.openWeatherConfigModal(colName);
-			} else if (type === 'tracker') {
-				this.openTrackerConfigModal(colName);
-			}
-		}, this.plugin.settings.stylePreset);
-		modal.open();
-	}
-
-	private openWeatherConfigModal(colName: string): void {
-		const modal = new WeatherConfigModal(this.app, (title, config) => {
-			this.sync.addCard(colName, {
-				title,
-				type: 'weather',
-				weatherConfig: config,
-			});
-		}, this.plugin.settings.stylePreset);
+			void this.sync.updateCard(card.id, updates);
+		});
 		modal.open();
 	}
 
 	private openTrackerConfigModal(colName: string): void {
 		const modal = new TrackerConfigModal(this.app, (title, config) => {
-			this.sync.addCard(colName, {
+			void this.sync.addCard(colName, {
 				title,
 				type: 'tracker',
 				trackerConfig: config,
 			});
-		}, this.plugin.settings.stylePreset);
+		});
 		modal.open();
 	}
 
@@ -851,13 +796,12 @@ export class DashboardView extends ItemView {
 			this.plugin,
 			(template) => {
 				this.pendingScrollToLastCardOfColumn = colName;
-				this.sync.addCard(colName, {
+				void this.sync.addCard(colName, {
 					title: template.name,
 					type: 'task',
 					tasks: template.tasks.map(text => ({ text, checked: false })),
 				});
 			},
-			this.plugin.settings.stylePreset,
 		);
 		modal.open();
 	}
@@ -865,11 +809,11 @@ export class DashboardView extends ItemView {
 		private openHeatmapConfigModal(columnName: string, existing?: import('./types').HeatmapItem): void {
 		const modal = new HeatmapConfigModal(this.app, (item) => {
 			if (existing) {
-				this.sync.updateHeatmapItem(columnName, existing.id, item);
+				void this.sync.updateHeatmapItem(columnName, existing.id, item);
 			} else {
-				this.sync.addHeatmapItem(columnName, item);
+				void this.sync.addHeatmapItem(columnName, item);
 			}
-		}, existing, this.plugin.settings.stylePreset);
+		}, existing);
 		modal.open();
 	}
 
@@ -885,7 +829,7 @@ export class DashboardView extends ItemView {
 			this.app,
 			existingConfig,
 			(config) => {
-				this.sync.updateLibraryConfig(colName, config);
+				void this.sync.updateLibraryConfig(colName, config);
 			},
 		);
 		modal.open();
@@ -893,7 +837,7 @@ export class DashboardView extends ItemView {
 
 	private openAddActionModal(): void {
 		const modal = new AddActionModal(this.app, (action) => {
-			this.sync.addQuickAction(action);
+			void this.sync.addQuickAction(action);
 		});
 		modal.open();
 	}
@@ -905,8 +849,7 @@ export class DashboardView extends ItemView {
 			if (action.target === 'daily-notes') {
 				await this.createNewJournal();
 			} else {
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				(this.app as any).commands.executeCommandById(action.target);
+				getCommands(this.app)?.executeCommandById(action.target);
 			}
 		}
 	}
@@ -926,19 +869,12 @@ export class DashboardView extends ItemView {
 
 	private openProjectSearchModal(colName: string): void {
 		const modal = new DocSearchModal(this.app, (link) => {
-			this.sync.addCard(colName, {
+			void this.sync.addCard(colName, {
 				title: link.name,
 				body: `[[${link.path}]]`,
 			});
 		});
 		modal.open();
-	}
-
-	private promptAddColumn(): void {
-		const name = prompt(t('renderer.sectionName'));
-		if (name?.trim()) {
-			this.sync.addColumn(name.trim());
-		}
 	}
 
 	private async navigateToPath(path: string): Promise<void> {
@@ -973,15 +909,16 @@ export class DashboardView extends ItemView {
 
 	private registerVaultListeners(): void {
 		const events = this.app.vault;
-		const handler = () => {
+		const handler = (file?: import('obsidian').TAbstractFile) => {
+			if (this.sync.isDashboardFile(file)) return;
 			this.debouncedRefreshRecentDocs();
-			this.debouncedRefreshLibrarySections();
+			if (!file || ![...this.sourceControllers.values()].some(controller => controller.usesPath(file.path))) this.debouncedRefreshLibrarySections();
 		};
 
 		const createRef = events.on('create', handler);
 		const modifyRef = events.on('modify', (file) => {
 			if (file instanceof TFile && file.extension === 'md') {
-				handler();
+				handler(file);
 			}
 		});
 		const deleteRef = events.on('delete', handler);
@@ -996,6 +933,7 @@ export class DashboardView extends ItemView {
 	}
 
 	private unregisterVaultListeners(): void {
+		if (this.libraryRefreshTimer) { clearTimeout(this.libraryRefreshTimer); this.libraryRefreshTimer = null; }
 		for (const { evt, ref } of this.vaultEventRefs) {
 			evt.offref(ref as Parameters<typeof evt.offref>[0]);
 		}
@@ -1020,13 +958,16 @@ export class DashboardView extends ItemView {
 		if (this.libraryRefreshTimer) clearTimeout(this.libraryRefreshTimer);
 		this.libraryRefreshTimer = setTimeout(() => {
 			const data = this.sync.getData();
-			if (data) this.render(data);
+			if (data) {
+				const columns = data.columns.filter(column => column.sectionType === 'library').map(column => column.name);
+				this.renderUpdatedColumns(data, columns);
+			}
 		}, 500);
 	}
 
 
 	private refreshRecentDocs(): void {
-		const root = this.containerEl.children[1] as HTMLElement;
+		const root = this.getDashboardRoot();
 		if (!root) return;
 
 		const recentSection = root.querySelector('.dashboard-recent');
@@ -1037,18 +978,14 @@ export class DashboardView extends ItemView {
 
 		recentSection.remove();
 		const docs = getRecentDocs(this.app, this.plugin.settings.recentDocCount);
-		renderRecentDocs(parent, docs, (path) => this.navigateToPath(path));
+		renderRecentDocs(parent, docs, handleAsync((path: string) => this.navigateToPath(path)));
 	}
 
-	private runCleanup(preserveBanner = false): void {
+	private runCleanup(preserveBanner = false, preserveSourceControllers = false): void {
+		if (!preserveSourceControllers) {
+			this.sourceControllers.forEach(controller => controller.unload()); this.sourceControllers.clear();
+		}
 		destroyAllCharts();
-		if (this.pomodoroService) {
-			this.pomodoroService.setOnTick(null);
-			this.pomodoroService.setOnComplete(null);
-		}
-		if (this.readingService) {
-			this.readingService.setOnTick(null);
-		}
 		for (const fn of this.cleanupFns) fn();
 		this.cleanupFns = [];
 		if (!preserveBanner) {
@@ -1067,26 +1004,6 @@ export class DashboardView extends ItemView {
 			clearInterval(this.reminderTimer);
 			this.reminderTimer = null;
 		}
-	}
-
-	private startWeatherRefresh(): void {
-		this.weatherRefreshTimer = setInterval(() => {
-			if (!this.data) return;
-			const hasWeather = this.data.columns.some(col =>
-				col.cards.some(c => c.type === 'weather')
-			);
-			if (hasWeather) {
-				this.render(this.data);
-			}
-		}, DashboardView.WEATHER_REFRESH_MS);
-	}
-
-	private stopWeatherRefresh(): void {
-		if (this.weatherRefreshTimer) {
-			clearInterval(this.weatherRefreshTimer);
-			this.weatherRefreshTimer = null;
-		}
-		clearWeatherCache();
 	}
 
 	private checkReminders(): void {
@@ -1129,14 +1046,14 @@ export class DashboardView extends ItemView {
 			this.app,
 			taskText,
 			() => {
-				this.sync.editTaskReminder(cardId, taskIndex, undefined);
+				void this.sync.editTaskReminder(cardId, taskIndex, undefined);
 			},
 			() => {
 				const snoozed = new Date(Date.now() + 60 * 60 * 1000);
 				const pad = (n: number) => String(n).padStart(2, '0');
 				const newReminder = `${snoozed.getFullYear()}-${pad(snoozed.getMonth() + 1)}-${pad(snoozed.getDate())} ${pad(snoozed.getHours())}:${pad(snoozed.getMinutes())}`;
 				this.firedReminders.delete(`${cardId}-${taskIndex}`);
-				this.sync.editTaskReminder(cardId, taskIndex, newReminder);
+				void this.sync.editTaskReminder(cardId, taskIndex, newReminder);
 			},
 		);
 		modal.open();

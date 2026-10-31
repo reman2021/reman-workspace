@@ -1,4 +1,5 @@
 import { t } from './i18n';
+import { inheritDashboardThemeVars } from './theme-utils';
 
 interface ConfirmOptions {
 	title: string;
@@ -12,6 +13,7 @@ export function showConfirmDialog(_app: unknown, options: ConfirmOptions): Promi
 		const done = (value: boolean) => {
 			if (resolved) return;
 			resolved = true;
+			document.removeEventListener('keydown', onKeydown);
 			resolve(value);
 		};
 
@@ -20,6 +22,7 @@ export function showConfirmDialog(_app: unknown, options: ConfirmOptions): Promi
 
 		// Dialog card
 		const dialog = overlay.createDiv({ cls: 'dashboard-confirm-card' });
+		inheritDashboardThemeVars(dialog);
 
 		dialog.createEl('h3', { text: options.title, cls: 'dashboard-confirm-title' });
 		dialog.createEl('p', { text: options.message, cls: 'dashboard-confirm-message' });

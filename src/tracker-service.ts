@@ -29,7 +29,7 @@ export function readTrackerData(
 			continue;
 		}
 
-		const raw = fm[key];
+		const raw: unknown = fm[key];
 		const num = typeof raw === 'number' ? raw : parseFloat(String(raw));
 		points.push({ date: dateStr, value: isNaN(num) ? null : num });
 	}
@@ -52,7 +52,7 @@ export function readAllFrontmatterTrackerData(
 		const fm = cache?.frontmatter;
 		if (!fm || !(key in fm)) continue;
 
-		const raw = fm[key];
+		const raw: unknown = fm[key];
 		const num = typeof raw === 'number' ? raw : parseFloat(String(raw));
 		if (isNaN(num)) continue;
 

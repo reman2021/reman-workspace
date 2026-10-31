@@ -1,225 +1,49 @@
-# Apex Dashboard
+# Reman Workspace · Lean workspace
 
-> This project is a fork of [PandoraReads/apex-dashboard](https://github.com/PandoraReads/apex-dashboard), with additional feature refinements and maintenance changes.
-
-> Stop switching between Obsidian notes. One page. Everything you need. Memo your thoughts, crush your todos, track your projects — and make it look incredible doing it. [【中文版】](README_ZH.md)
-
-## Screenshot
-
-![Apex Dashboard](screenshot1.png)
+**Reman Workspace** is a personal Obsidian workspace derived from [PandoraReads/apex-dashboard](https://github.com/PandoraReads/apex-dashboard), version **1.1.5**. It keeps a focused home page and its existing customizations rather than merging upstream 3.x wholesale. The plugin ID and package name are `reman-workspace`; the existing local checkout and repository name do not need to change.
 
 ## Features
 
-### 🗒️ Memo
-Capture thoughts instantly with a built-in memo pad. Each memo card has a writable textarea — jot down ideas, meeting notes, or daily reflections without leaving your dashboard. Supports `[[wikilinks]]` that render as clickable links.
+- Optional **monthly/daily plan source cards** inside Todo: configurable local-date path templates and section scope, source-relative Markdown links, atomic checkbox writeback, external-file refresh and a template-command entry when the note is missing. No source tasks are copied into the dashboard.
+- Memos, todos, wikilinks, inline editing, task drag ordering, reminders, task templates, archive and restore.
+- A Monday-to-Sunday weekly strip with today highlighted, file and command shortcuts, recent documents, and compact file search. Search matches names and vault-relative paths (case insensitive), displays up to 20 results with paths, and supports arrow keys, Enter, Escape and clicks. Includes Markdown, Bases, Canvas, PDF and supported media; hidden directories are excluded. Mobile search lives in the banner's quick-actions drawer.
+- Unified note cards with linked documents and document drag ordering. A non-empty cover path shows the resolved image, an empty path keeps the card coverless, and an unresolved path shows a placeholder.
+- Frontmatter-based database filters with grid, list, table and kanban views. Existing Obsidian Bases remain ordinary files you can open from shortcuts or search.
+- Optional numeric trackers and heatmaps, retaining their existing data sources and Chart.js charts.
+- One adaptive default appearance with no theme selector, plus section folding, custom title, optional startup opening, a quote-library banner, color picker and rotating background images. The appearance follows Obsidian's current light/dark mode and theme colors, using borderless sections, solid cards, light shadows, clear card boundaries and small 2/3/4 px corner radii.
+- Up to five home-page backups in `.obsidian/plugins/reman-workspace/backups/`.
 
-### ✅ Todo
-Manage tasks with interactive checklists. Add, reorder, drag-and-drop, and check off tasks. A progress bar shows completion percentage at a glance. Todo items also support `[[wikilinks]]` for cross-referencing notes.
+Add-action controls stay visible before the pin button. Plugin modals use one native outer surface; textareas stay within the modal width and can only resize vertically.
 
-### 📁 Projects
-Organize your vault documents into project cards. Each card links to related notes, displays a cover image (supports both local vault images and web URLs), and supports inline document search to add new files quickly. Manage multiple file types including Markdown notes, PDFs, images, audio, and video.
+## Removed
 
-### 📝 Notes
-A compact, list-style section for organizing reference documents and quick-access files. Displays up to 5 cards per row without cover images for maximum density.
+Weather, lunar/almanac, fortune drawing, Pomodoro, reading timers and countdowns, including controls, services and dedicated dependencies. No RSS, AI dispatch, workflow engine, music, accounting or new query engine is introduced.
 
-### ⚡ Quick Actions
-Pin your most-used shortcuts to the sidebar. Supports two action types: **File** links to open any document, and **Command** shortcuts to trigger any Obsidian command. Includes built-in presets for New Journal and New Note.
+Legacy settings for removed features are ignored. Legacy weather cards are hidden while their original Markdown is retained when other cards are saved. Historical record files are never deleted. Task reminders and database filters still offer date pickers.
 
-### 🌤️ Sidebar Widgets
-The left sidebar features decorative widgets for at-a-glance information:
+New boards contain only empty Memo and Todo sections. Existing layouts remain supported. Vault notes, templates, Bases and installed plugin files are not changed by this repository update.
 
-- **Week Calendar** — A compact 7-day strip highlighting today's date
-- **Weather Widget** — Real-time weather with current temperature, feels-like, humidity, wind speed, and a 5-day forecast with daily high/low temperatures. Powered by Open-Meteo (no API key needed). City search with geocoding autocomplete for precise location
-- **Heatmap Widget** — Track daily frontmatter data (mood, sleep, etc.) as a GitHub-style contribution heatmap. Configurable summary: streak days (⚡), completion rate (✅), or both
-- **Pomodoro Timer** — A focus timer with activity selector and session tracking. Start, pause, and stop timed sessions with a donut chart showing today's breakdown by activity
-- **Currently Reading** — Track your reading sessions with a built-in timer. Add book information manually, time your reading sessions, and record progress with page numbers. Each book card shows cover image, author, and reading progress bar
-- **Day Counter** — Up to three compact day counters for important target dates, displayed by days remaining
+## Migration compatibility
 
-### 🗃️ Library
-Create database-like sections from your vault notes. Filter by explicit frontmatter properties, select matching property values as chips, group Kanban cards by a property, and switch between grid, list, table, and Kanban views.
+Existing `apex-dashboard-view` workspace layouts and `apex-dashboard-*` state keys remain readable. When the new plugin has no current settings yet, it imports the legacy plugin settings; Reman Workspace subsequently writes settings, workspace views and state under the new `reman-workspace` identity. New sections offer one unified **Notes** type; legacy `type: notes` sections are read as that same type without a manual dashboard-file migration.
 
-### 🎨 Banner
-A customizable banner with an inspirational quote, optional author, quote color, external quote library, and background image list. Quote library entries can include authors, and multiple background images rotate automatically. Supports both local vault images and web URLs. Double-click to edit.
+Legacy `stylePreset` values remain readable but always fall back to the single default appearance at runtime. No manual settings migration is required.
 
-### 🔄 Drag & Drop
-Drag task items within Todo cards to reorder. Drag document links between project/note cards.
+Backups are now written to `.obsidian/plugins/reman-workspace/backups/`. Files under `.obsidian/plugins/apex-dashboard/backups/` are not moved automatically; keep that directory or copy any backups you still need into the new location.
 
-### 🧩 Custom Sections
-Create sections with built-in types — **Memo**, **Todo**, **Projects**, **Notes**, **Dashboard**, and **Library** — each with its own layout and behavior. Mix and match to fit your workflow.
+## Build and install
 
-### 🕐 Recent Documents
-The sidebar shows recently edited files with relative timestamps, so you can jump back into your latest work.
+Use **Node.js 22 or newer** for development and **Obsidian 1.8.7 or newer** to run the plugin.
 
-## Themes
+```sh
+npm ci
+npm run build
+npm run lint
+npm test
+```
 
-14 handcrafted themes, each with distinct visual identity:
+Copy the root **main.js**, **styles.css** and **manifest.json** into your vault's `.obsidian/plugins/reman-workspace/` directory, then reload and enable **Reman Workspace**. Preserve the existing `data.json` and historical records. Set Dashboard file to a vault-relative path without `.md`, such as `Home`. Do not replace an existing home page with the starter template.
 
-| Theme | Style | Obsidian base mode |
-|-------|-------|--------------------|
-| **Default** | Low-saturation colors derived from the current Obsidian theme | Light and dark |
-| **Earth** | Warm soil, wood, and moss tones with parchment warmth | Light and dark |
-| **Nordic** | Restrained ice gray, fjord blue, and cool cyan | Light and dark |
-| **Aurora** | Polar night glass with cyan, blue, and violet aurora glow | Light and dark |
-| **Spring** | Peach, blossom pink, warm gold, and soft green | Light and dark |
-| **Island** | Cream sand, sea-breeze mint, and deeper forest title accents | Light and dark |
-| **Tundra** | Cold gray-green, moss, and frost-white cards | Light and dark |
-| **Blossom** | Petal pink and muted rose with softened light-mode red accents | Light and dark |
-| **Matcha** | Warm matcha milk green with tea-dessert gold | Light only |
-| **Lilac** | Gentle lilac, gray-purple, and muted rose | Light only |
-| **Haze** | Blue-gray mist, soft silver, and glassy dark haze | Dark only |
-| **Ember** | Smoky charcoal with warm ember orange | Dark only |
-| **Jade** | Polished jade green, bamboo mist, and muted gold | Dark only |
-| **Eclipse** | Graphite, silver-gray, and eclipse-shadow contrast | Dark only |
+`npm run test:browser` uses installed Chrome/Edge, or the executable specified by `CHROME_PATH`, to test desktop/mobile layouts, search, Todo interactions and canvas charts. Screenshots go to ignored `.test-output/`. Automated tests use synthetic vault data and an Obsidian API test double; final validation inside the actual Obsidian client remains a manual step.
 
-## Settings
-
-- **Dashboard file** — customize the file path for your dashboard data
-- **Dashboard title** — customize the dashboard tab name
-- **Open dashboard on startup** — optionally open the dashboard as the first workspace tab when the vault opens
-- **Style** — choose from 14 visual themes
-- **Language** — English or Chinese interface
-- **Recent documents count** — control how many recent files appear
-- **Sidebar widgets** — Weather, Heatmap, Pomodoro, Currently Reading, Day Counter. Enable/disable and configure each widget independently
-- **Reading settings** — Toggle Currently Reading, enable/disable session completion sound
-
-## Installation
-
-### Manual Installation
-1. Download or build this fork.
-2. Copy `main.js`, `styles.css`, and `manifest.json` into your vault's `.obsidian/plugins/apex-dashboard/` folder.
-3. Open Settings > Community Plugins and enable "Apex Dashboard".
-
-## Usage
-
-1. Open the dashboard via the ribbon icon (home icon) or command palette: `Apex Dashboard: Open dashboard`
-2. A `dashboard.md` file is automatically created in your vault root
-3. All changes are saved directly to the file — it's your data, in plain text
-
-Common workflows:
-
-- Edit the banner to set a quote, optional author, quote color, quote library path, and one or more background images.
-- Use Todo card actions to archive completed or inactive cards. Archived cards keep their archive date and can be restored from the archived-card list.
-- Open Day Counter settings from the sidebar widget, add up to three target dates, and pick dates from the calendar popup.
-- Use Currently Reading to manually enter book information, then track reading sessions and page progress.
-- Configure Library sections by selecting explicit frontmatter properties and choosing existing property values as filters.
-
-> **Note:** Deleting, renaming, or reordering sections must be done by editing the `dashboard.md` file directly. Any changes made to the note will take effect in the dashboard view immediately.
-
-## What's New
-
-### Current fork updates
-- **Fork notice and manifest alignment** — Updated project metadata for the `apex-dashboard` fork and fixed plugin activation issues caused by mismatched manifest IDs
-- **Banner quote library** — Added Vault-relative quote library support. Each non-empty line can be `Quote | Author`, `Quote - Author`, or a quote without an author
-- **Banner editor simplification** — Removed the old quote collection editor and kept quote randomization through the quote library only
-- **Background image list** — Replaced the single background image path field with a background image list. One image stays fixed; multiple images rotate about every 30 minutes
-- **Quote color picker** — Quote color now uses a circular color swatch with reset support
-- **Todo archive management** — Todo cards can be archived, restored, and reviewed in a compact archived-card list with archive dates
-- **Day Counter redesign** — Replaced the old countdown timer with up to three compact day counters, calendar date picking, and day-only display
-- **Currently Reading redesign** — Renamed Reading Tracker to Currently Reading and replaced book search with manual book information entry
-- **Library filter configuration** — Database sections now list explicit note properties and selectable property values for filtering
-- **Theme-synced modals** — Dashboard modals such as Library configuration, banner editing, card editing, widget setup, and Day Counter settings now inherit the active dashboard theme
-- **Startup dashboard option** — Added an optional setting to open the dashboard automatically when the vault opens
-- **Pomodoro refinements** — Added a reset button, stabilized the tomato stats icon, and fixed dark-mode text color in the focus statistics donut chart
-- **Hover and layout fixes** — Removed upward hover movement from dashboard cards and quick action items, fixed Todo card height, and prevented Todo task changes from resetting banner rotation
-- **Dashboard title setting** — Added a custom dashboard tab title setting with fallback to the default name
-- **Chinese usage guide** — Updated the detailed Chinese usage guide to cover setup, banner, quick actions, Pomodoro, heatmap/tracker, Day Counter, Currently Reading, Todo archiving, Library filters, themes, and troubleshooting
-
-### 1.1.3
-- **Mobile widget bar redesign** — Replaced the overlapping tab buttons with a collapsible strip below the banner. Tap the strip to reveal wider bookmark tabs (Pomodoro, Currently Reading, Lunar), then tap a tab to expand its widget panel
-- **Theme-aware tab colors** — Tab icons now transition from gray (inactive) to the theme primary text color (active), adapting to both light and dark themes
-- **Updated widget icons** — Pomodoro uses hourglass icon, Lunar uses moon icon for clearer visual identity
-- **Custom dialogs** — Replaced native browser dialogs with Obsidian-styled custom modals
-- **Class rename** — Cleaned up internal class naming conventions
-- **Style improvements** — Various visual polish and consistency fixes
-
-### 1.1.2
-- **Obsidian plugin review fixes** — Addressed feedback from the official Obsidian plugin review process
-- **MIT license** — Changed license from ISC to MIT
-
-### v1.1.1
-- **Library config persistence** — Fixed a critical bug where library section configurations (filters, view mode, sort settings, page size) were lost after restarting Obsidian. The YAML parser now correctly handles nested objects in column definitions
-- **Grid position persistence** — Fixed grid position (gcol/grow) values never being saved to the dashboard file, causing card positions to reset on reload
-- **Write race condition fix** — Fixed a race condition where rapid updates could cause the file watcher to overwrite newer data with older content
-
-### v1.1.0
-- **Currently Reading widget** — Full reading session management in the sidebar: add book information manually, start/pause/stop reading timer, and save sessions with page progress
-- **Book cards** — Each active book displays cover image, title, author, reading progress bar, and today's reading time. Cover images support both web URLs and local vault paths
-- **Edit book info** — Hover a book card to reveal edit (pencil) and remove (x) buttons. Edit modal supports changing title, author, total pages, and cover image URL/path
-- **Reading statistics** — Full stats page with total reading time, today's reading, book count, streak days, book list by time range (week/month/year), and recent session records. Delete individual records or entire book histories
-- **Pomodoro activity selector** — Activity selector moved to the timer title position with a dropdown picker for categorizing focus sessions
-- **Pomodoro donut chart** — Visual breakdown of today's focus sessions by activity, displayed as a donut chart in the stats view
-
-### v1.0.8
-- **Sidebar weather widget** — Real-time weather with current temperature, feels-like temperature, humidity, wind speed, and a 5-day forecast (daily icons + high/low). Powered by Open-Meteo, no API key required
-- **Sidebar heatmap widget** — GitHub-style contribution heatmap for tracking daily frontmatter data (mood, sleep, weight, etc.)
-- **Heatmap summary** — Configurable stats below the heatmap: streak days (⚡), completion rate (✅), both, or off
-- **Week calendar strip** — Compact 7-day strip in the sidebar highlighting today
-- **City search** — Geocoding autocomplete when configuring the weather city in settings
-- **Dashboard weather cards** — Weather card widgets in the main dashboard also show feels-like, humidity, and wind
-- **i18n** — All sidebar widget settings now support both English and Chinese
-- **5 new themes** — Matcha (green tea warmth), Lilac (soft purple), Sakura (cherry blossom pink), Eclipse (dark mode), Moonlight (silver blue)
-
-### v1.0.7
-- **Task reminders** — Set per-task reminders with a calendar popup. Click the bell icon on any task to pick a date and time
-- **Calendar picker** — Visual month calendar with navigation, day selection, and hour/minute dropdowns (no manual date typing)
-- **Overdue indicator** — Overdue task bell icon turns red with a pulse animation
-- **Obsidian notifications** — 60-second periodic checker triggers an Obsidian Notice when a task is due
-- **Inline markdown storage** — Reminders stored as `⏰ YYYY-MM-DD HH:MM` in task text, fully readable and editable in the markdown file
-- **Island theme** — New Animal Crossing-inspired pastel theme with forest green sections and ocean blue accents
-- **i18n** — Reminder UI supports both English and Chinese
-- **Resizable section cards** — Drag to resize any card within a section, with min/max width constraints and persistent sizing
-- **Collapsible sidebar** — Left sidebar is now resizable; click the pin button to fix it in place
-- **6 new themes** — Tundra (sage green aurora), Blossom (rose glass, transparent sections), Haze (smoky blue mist, glass transparency), Ember (warm campfire smoke), Dusk (purple twilight mist), Jade (green bamboo mist)
-- **Transparent sections** — Tundra, Blossom, Haze, Ember, Dusk, and Jade feature borderless transparent sections with floating cards
-- **Banner overlay removed** — Banner images no longer covered by a dark overlay filter
-- **Faster banner rotation** — Quotes rotate every 1 hour, images every 30 minutes
-
-### v1.0.6
-- **Multi-quote banner** — Store multiple quotes in the banner, each with its own author. Add, edit, and delete quotes in the edit modal
-- **Banner image rotation** — Add multiple background images that rotate every 2 hours with a smooth fade transition
-- **Quote auto-rotation** — Quotes rotate every 2 hours (offset 1 hour from image rotation so they never swap simultaneously)
-- **Double-click rename sections** — Double-click any section title to rename it inline (Enter to save, Escape to cancel)
-- **Collapsible sections** — Click the triangle indicator on section headers to collapse/expand sections. Collapse state persists across sessions
-- **Cross-card drag & drop** — Drag document links between project/note cards, and drag task items between todo cards
-- **Card reordering fix** — Fixed card drag-and-drop positioning in all sections (Todo, Projects, Notes). Cards now land exactly where you drop them instead of always moving to the first position
-- **Empty card interaction** — Cards with all items removed can now receive new items via drag-and-drop or the add input
-- **Mobile improvements** — Memo color picker button hidden on mobile, mobile drawer uses solid background for all themes, taller quick actions list
-
-### v1.0.5
-- **Distinct toggle colors** — Each section type (Memo, Todo, Projects, Notes) has its own triangle indicator color
-- **Banner modal button sizing** — "Add quote" and "Add image" buttons in the banner edit modal now use fit-content width instead of stretching full width
-- **Projects card default width** — Fixed new project cards stretching across the entire section; cards now have a proper default width (280px)
-- **Section type robustness** — Three-layer defense for section type preservation: frontmatter `type:` field, name-based heuristics, and card type distribution analysis. Section types survive manual file edits, heading renames, and position swaps
-- **Project card type persistence** — `type: project` is now written to the file and preserved across save/reload cycles, preventing cards from reverting to generic type
-- **Default template fix** — Projects and Library sections now include `sectionType` in the default template and column definitions
-
-### v1.0.4
-- **Quick Actions** — Quick Links upgraded to Quick Actions, supporting both file links and Obsidian command shortcuts
-- **Add Action modal** — Two tabs (File / Command) for adding custom actions, with built-in presets for New Journal and New Note
-- **4 Section types** — Memo, Todo, Projects, and Notes, each with its own layout and behavior
-- **Multi-format document support** — Manage Markdown, PDF, images (PNG, JPG, GIF, SVG, WebP), audio (MP3, M4A), and video (MP4, MOV) in project cards
-- **Bidirectional links** — Memo and Todo cards render `[[wikilinks]]` as clickable links with basename fallback
-- **Journal path setting** — Configure where new diary entries are saved
-- **UI polish** — Vertical scrollbars hidden on desktop, theme-colored horizontal scrollbar, notes section layout optimization
-- **Bug fixes** — Fixed wiki link clicks in memo cards, quick link rename race condition, rename listener cleanup on plugin unload
-
-### v1.0.3
-- **Wikilink support** — Memo and Todo cards now render `[[wikilinks]]` as clickable links
-- **Section type selector** — Choose section type when creating new sections
-- **Mobile sidebar drawer** — Slide-in animation for mobile navigation
-- **Section creation UX** — Confirm button for mobile section creation, 'Add new section' command shortcut
-- **Bug fixes** — Card drag restricted to header/cover area, mobile banner edit button, drawer alignment
-
-### v1.0.2
-- **Section management** — Manual section deletion, section type selector
-- **Mobile improvements** — Better card scrolling and mobile layout
-- **Bug fixes** — Respect body section order, form reset prevention
-
-## Compatibility
-
-- Obsidian v0.15.0+
-- Desktop and mobile
-
-## License
-
-0BSD
+MIT licensed; original author attribution is retained.

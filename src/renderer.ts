@@ -1,21 +1,20 @@
+import { handleAsync } from './async-utils';
 import { App, setIcon } from 'obsidian';
 import type { DashboardData, DashboardColumn, DashboardCard, RenderCallbacks, TaskItem, DashboardSettings, CardSize, TrackerStyle } from './types';
 import { t, getLanguage } from './i18n';
-import { renderLibrarySection } from './library-section';
-import type { LibraryConfig } from './types';
+import { renderLibrarySection, destroyLibraryPopups } from './library-section';
 import { resolveVaultImage } from './banner';
 import { attachFileSuggest } from './file-suggest';
 import { showConfirmDialog } from './confirm-dialog';
-import { fetchWeather, getCachedWeather, getWeatherEmoji, getWeatherDescription } from './weather-service';
 import { readAllFrontmatterTrackerData, readTrackerData } from './tracker-service';
-import type { PomodoroService } from './pomodoro-service';
-import type { ReadingService } from './reading-service';
-import { downloadCoverAsBlobUrl } from './book-service';
-import { activityColor } from './pomodoro-service';
-import { renderSidebarLunarWidget } from './lunar-widget';
-import type { HolidayInfo } from './holiday-service';
-import { CountdownSettingsModal, getCountdownItems } from './countdown-modal';
 import { inheritDashboardThemeVars } from './theme-utils';
+import {
+	COLLAPSED_STORAGE_KEY,
+	LEGACY_COLLAPSED_STORAGE_KEY,
+	SHOW_ARCHIVED_STORAGE_KEY,
+	LEGACY_SHOW_ARCHIVED_STORAGE_KEY,
+	findDashboardRoot,
+} from './identity';
 import { Chart, LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip } from 'chart.js';
 
 Chart.register(LineController, LineElement, PointElement, BarController, BarElement, LinearScale, CategoryScale, Filler, Tooltip);
@@ -31,16 +30,34 @@ function destroyChart(cardId: string): void {
 }
 
 export function destroyAllCharts(): void {
+	destroyLibraryPopups();
+	closeAllReminderPopups();
 	for (const [, chart] of chartInstances) {
 		chart.destroy();
 	}
 	chartInstances.clear();
 }
 
+export function destroyChartsIn(container: HTMLElement): void {
+	for (const card of Array.from(container.querySelectorAll<HTMLElement>('[data-card-id]'))) {
+		if (card.dataset.cardId) destroyChart(card.dataset.cardId);
+	}
+	if (container.querySelector('.dashboard-library-content')) destroyLibraryPopups();
+	closeAllReminderPopups();
+}
+
 function getCSSVar(name: string): string {
-	const el = document.querySelector('.apex-dashboard-root');
+	const el = findDashboardRoot();
 	if (!el) return '';
-	return getComputedStyle(el).getPropertyValue(name).trim();
+	const value = getComputedStyle(el).getPropertyValue(name).trim();
+	if (!value) return '';
+	// Theme tokens can be rgb() or color-mix(); normalize before adding hex alpha.
+	const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+	const context = canvas.getContext('2d');
+	if (!context) return value;
+	context.fillStyle = value; context.fillRect(0, 0, 1, 1);
+	const pixel = context.getImageData(0, 0, 1, 1).data;
+	return '#' + Array.from(pixel).slice(0, 3).map(channel => channel.toString(16).padStart(2, '0')).join('');
 }
 
 let taskDragSource: { cardId: string; taskIndex: number } | null = null;
@@ -52,8 +69,6 @@ function getSearchableFiles(app: App) {
 	return app.vault.getFiles()
 		.filter(f => !f.path.startsWith('.') && VAULT_FILE_EXTS.has(f.extension));
 }
-
-// ===== Sidebar Widget Rendering =====
 
 export function renderSidebarWeekCalendar(container: HTMLElement): void {
 	const now = new Date();
@@ -84,1349 +99,6 @@ export function renderSidebarWeekCalendar(container: HTMLElement): void {
 	}
 }
 
-export function renderSidebarWidgets(
-	container: HTMLElement,
-	settings: import('./types').DashboardSettings,
-	app: App,
-	pomodoroService?: PomodoroService,
-	readingService?: ReadingService,
-	holidayData?: Record<string, HolidayInfo>,
-	onWidgetReorder?: (order: string[]) => void,
-): void {
-	const anyEnabled = settings.widgetWeatherEnabled || settings.pomodoroEnabled || settings.widgetLunarEnabled || settings.countdownEnabled || settings.readingEnabled;
-	if (!anyEnabled) return;
-
-	const widgetArea = container.createDiv({ cls: 'dashboard-sidebar-widgets' });
-
-	const DEFAULT_ORDER = ['lunar', 'weather', 'heatmap', 'pomodoro', 'reading', 'countdown'];
-	const order = settings.widgetOrder?.length ? settings.widgetOrder : DEFAULT_ORDER;
-
-	type WidgetEntry = { key: string; render: () => void };
-	const enabled: WidgetEntry[] = [];
-	if (settings.widgetLunarEnabled) {
-		enabled.push({ key: 'lunar', render: () => renderSidebarLunarWidget(widgetArea, holidayData ?? {}, app) });
-	}
-	if (settings.widgetWeatherEnabled) {
-		enabled.push({ key: 'weather', render: () => renderSidebarWeather(widgetArea, settings, app) });
-	}
-	if (settings.pomodoroEnabled && pomodoroService) {
-		enabled.push({ key: 'pomodoro', render: () => renderSidebarPomodoro(widgetArea, pomodoroService, settings) });
-	}
-	if (settings.readingEnabled && readingService) {
-		enabled.push({ key: 'reading', render: () => renderSidebarReading(widgetArea, readingService) });
-	}
-	if (settings.countdownEnabled) {
-		enabled.push({ key: 'countdown', render: () => renderSidebarCountdown(widgetArea, settings, app) });
-	}
-
-	const ordered = sortByOrder(enabled, order);
-
-	for (const { key, render } of ordered) {
-		const childCount = widgetArea.children.length;
-		render();
-		const el = widgetArea.children[childCount] as HTMLElement | undefined;
-		if (el) el.dataset.widgetKey = key;
-	}
-
-	if (onWidgetReorder) {
-		setupWidgetDnD(widgetArea, ordered.map(e => e.key), onWidgetReorder);
-	}
-}
-
-type WidgetEntry = { key: string; render: () => void };
-
-function sortByOrder(items: WidgetEntry[], order: string[]): WidgetEntry[] {
-	const orderMap = new Map(order.map((k, i) => [k, i]));
-	const sorted = [...items].sort((a, b) => {
-		const ai = orderMap.get(a.key) ?? order.length;
-		const bi = orderMap.get(b.key) ?? order.length;
-		return ai - bi;
-	});
-	return sorted;
-}
-
-function setupWidgetDnD(
-	widgetArea: HTMLElement,
-	currentKeys: string[],
-	onReorder: (order: string[]) => void,
-): void {
-	let draggedKey: string | null = null;
-
-	const widgets = () => widgetArea.querySelectorAll('.dashboard-sidebar-widget');
-
-	widgets().forEach(el => {
-		const wEl = el as HTMLElement;
-		wEl.setAttribute('draggable', 'true');
-		wEl.dataset.widgetKey ??= wEl.dataset.widgetKey ?? '';
-
-		wEl.addEventListener('dragstart', (e) => {
-			draggedKey = wEl.dataset.widgetKey ?? null;
-			wEl.addClass('dashboard-sidebar-widget--dragging');
-			if (e.dataTransfer) {
-				e.dataTransfer.effectAllowed = 'move';
-				e.dataTransfer.setData('text/plain', draggedKey ?? '');
-			}
-		});
-
-		wEl.addEventListener('dragend', () => {
-			wEl.removeClass('dashboard-sidebar-widget--dragging');
-			widgets().forEach(el2 => el2.removeClass('dashboard-sidebar-widget--drag-over'));
-			draggedKey = null;
-		});
-
-		wEl.addEventListener('dragover', (e) => {
-			e.preventDefault();
-			if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-			if (!draggedKey || wEl.dataset.widgetKey === draggedKey) return;
-			widgets().forEach(el2 => el2.removeClass('dashboard-sidebar-widget--drag-over'));
-			const rect = wEl.getBoundingClientRect();
-			const midY = rect.top + rect.height / 2;
-			if (e.clientY < midY) {
-				wEl.addClass('dashboard-sidebar-widget--drag-over-top');
-				wEl.removeClass('dashboard-sidebar-widget--drag-over-bottom');
-			} else {
-				wEl.addClass('dashboard-sidebar-widget--drag-over-bottom');
-				wEl.removeClass('dashboard-sidebar-widget--drag-over-top');
-			}
-		});
-
-		wEl.addEventListener('dragleave', () => {
-			wEl.removeClass('dashboard-sidebar-widget--drag-over-top');
-			wEl.removeClass('dashboard-sidebar-widget--drag-over-bottom');
-		});
-
-		wEl.addEventListener('drop', (e) => {
-			e.preventDefault();
-			wEl.removeClass('dashboard-sidebar-widget--drag-over-top');
-			wEl.removeClass('dashboard-sidebar-widget--drag-over-bottom');
-			if (!draggedKey || wEl.dataset.widgetKey === draggedKey) return;
-
-			const targetKey = wEl.dataset.widgetKey ?? '';
-			const rect = wEl.getBoundingClientRect();
-			const midY = rect.top + rect.height / 2;
-			const insertBefore = e.clientY < midY;
-
-			const keys = [...currentKeys];
-			const fromIdx = keys.indexOf(draggedKey);
-			if (fromIdx === -1) return;
-			keys.splice(fromIdx, 1);
-			let toIdx = keys.indexOf(targetKey);
-			if (toIdx === -1) return;
-			if (!insertBefore) toIdx += 1;
-			keys.splice(toIdx, 0, draggedKey);
-			onReorder(keys);
-		});
-	});
-}
-
-function renderSidebarWeather(container: HTMLElement, settings: import('./types').DashboardSettings, app: App): void {
-	const widget = container.createDiv({ cls: 'dashboard-sidebar-widget dashboard-sidebar-weather' });
-	const cityName = settings.widgetWeatherCity || '';
-
-	widget.createDiv({ cls: 'dashboard-sidebar-weather-loading', text: '...' });
-
-	const config = {
-		latitude: settings.widgetWeatherLat || 31.23,
-		longitude: settings.widgetWeatherLon || 121.47,
-		cityName: cityName || 'Shanghai',
-	};
-
-	const cached = getCachedWeather(config);
-	if (cached) {
-		widget.empty();
-		renderSidebarWeatherContent(widget, cached, config.cityName);
-		return;
-	}
-
-	fetchWeather(config).then(data => {
-		widget.empty();
-		renderSidebarWeatherContent(widget, data, config.cityName);
-	}).catch(() => {
-		widget.empty();
-		widget.createDiv({ cls: 'dashboard-sidebar-weather-error', text: '--' });
-	});
-}
-
-function renderSidebarWeatherContent(el: HTMLElement, data: import('./types').WeatherData, cityName: string): void {
-	const top = el.createDiv({ cls: 'dashboard-sidebar-weather-top' });
-	top.createDiv({ cls: 'dashboard-sidebar-weather-icon', text: getWeatherEmoji(data.weatherCode) });
-	const tempWrap = top.createDiv({ cls: 'dashboard-sidebar-weather-temp-wrap' });
-	tempWrap.createDiv({ cls: 'dashboard-sidebar-weather-temp', text: `${Math.round(data.temperature)}°` });
-
-	const info = el.createDiv({ cls: 'dashboard-sidebar-weather-info' });
-	info.createDiv({ cls: 'dashboard-sidebar-weather-city', text: cityName });
-	const descLine = info.createDiv({ cls: 'dashboard-sidebar-weather-desc-line' });
-	descLine.createSpan({ cls: 'dashboard-sidebar-weather-desc', text: getWeatherDescription(data.weatherCode) });
-
-	const details = el.createDiv({ cls: 'dashboard-sidebar-weather-details' });
-	details.createDiv({ cls: 'dashboard-sidebar-weather-detail', text: `${t('weather.feelsLike') ?? 'Feels like'} ${Math.round(data.feelsLike)}°` });
-	details.createDiv({ cls: 'dashboard-sidebar-weather-detail', text: `${t('weather.humidity') ?? 'Humidity'} ${Math.round(data.humidity)}%` });
-	details.createDiv({ cls: 'dashboard-sidebar-weather-detail', text: `${Math.round(data.windSpeed)} km/h` });
-
-	if (data.dailyDates.length > 1) {
-		const forecast = el.createDiv({ cls: 'dashboard-sidebar-weather-forecast' });
-		const count = Math.min(data.dailyDates.length, 5);
-		for (let i = 0; i < count; i++) {
-			const day = forecast.createDiv({ cls: 'dashboard-sidebar-weather-fday' });
-			const d = new Date(data.dailyDates[i]! + 'T00:00:00');
-			const dayName = d.toLocaleDateString(getLanguage() === 'zh' ? 'zh-CN' : 'en', { weekday: 'short' });
-			day.createDiv({ cls: 'dashboard-sidebar-weather-fday-name', text: i === 0 ? t('weather.today') ?? 'Today' : dayName });
-			day.createDiv({ cls: 'dashboard-sidebar-weather-fday-icon', text: getWeatherEmoji(data.dailyCodes[i]!) });
-			const temps = day.createDiv({ cls: 'dashboard-sidebar-weather-fday-temps' });
-			temps.createSpan({ cls: 'dashboard-sidebar-weather-fday-high', text: `${Math.round(data.dailyMax[i]!)}°` });
-			temps.createSpan({ cls: 'dashboard-sidebar-weather-fday-low', text: `${Math.round(data.dailyMin[i]!)}°` });
-		}
-	}
-}
-export function renderSidebarPomodoro(
-	container: HTMLElement,
-	service: PomodoroService,
-	settings: import('./types').DashboardSettings,
-): void {
-	const widget = container.createDiv({ cls: 'dashboard-sidebar-widget dashboard-sidebar-pomodoro' });
-
-	const state = service.getState();
-	const isRunning = state.status === 'running';
-
-	// Top row: today count left + activity selector centered + stats button right
-	const topRow = widget.createDiv({ cls: 'dashboard-sidebar-pomodoro-top' });
-
-	const todayCount = service.getTodayCount();
-	const statsHint = topRow.createDiv({
-		cls: 'dashboard-sidebar-pomodoro-stats-hint',
-	});
-	statsHint.createSpan({ cls: 'dashboard-sidebar-pomodoro-tomato', text: '🍅' });
-	const statsHintText = statsHint.createSpan({ text: t('pomodoro.today') + ' ' + todayCount });
-
-	topRow.createDiv({ cls: 'dashboard-sidebar-pomodoro-top-spacer' });
-
-	// Activity selector (in title position)
-	const currentActivity = service.getActivity();
-	const { activityTrigger, updateActivityDisplay } = createActivitySelector(topRow, service, currentActivity);
-
-	const statsBtn = topRow.createDiv({ cls: 'dashboard-sidebar-pomodoro-stats-btn' });
-	statsBtn.setAttribute('aria-label', t('pomodoro.statsTitle'));
-	statsBtn.setAttribute('title', t('pomodoro.statsTitle'));
-	setIcon(statsBtn, 'bar-chart-2');
-
-	// Ring
-	const ringWrap = widget.createDiv({ cls: 'dashboard-sidebar-pomodoro-ring-wrap' });
-	const svgSize = 72;
-	const strokeWidth = 6;
-	const radius = (svgSize - strokeWidth) / 2;
-	const circumference = 2 * Math.PI * radius;
-
-	const svg = ringWrap.createSvg('svg', {
-		cls: 'dashboard-sidebar-pomodoro-ring',
-		attr: { viewBox: `0 0 ${svgSize} ${svgSize}`, width: String(svgSize), height: String(svgSize) },
-	});
-	svg.createSvg('circle', {
-		cls: 'dashboard-sidebar-pomodoro-ring-bg',
-		attr: { cx: svgSize / 2, cy: svgSize / 2, r: radius, 'stroke-width': strokeWidth, fill: 'none' },
-	});
-	const progressCircle = svg.createSvg('circle', {
-		cls: 'dashboard-sidebar-pomodoro-ring-progress',
-		attr: {
-			cx: svgSize / 2, cy: svgSize / 2, r: radius, 'stroke-width': strokeWidth, fill: 'none',
-			'stroke-linecap': 'round', 'stroke-dasharray': circumference, 'stroke-dashoffset': '0',
-			transform: `rotate(-90 ${svgSize / 2} ${svgSize / 2})`,
-		},
-	});
-	const timeText = ringWrap.createDiv({
-		cls: 'dashboard-sidebar-pomodoro-time',
-		text: formatTime(state.remainingSeconds),
-	});
-
-	// Dots inside ring, below time
-	const dotsWrap = ringWrap.createDiv({ cls: 'dashboard-sidebar-pomodoro-dots' });
-	const interval = settings.pomodoroLongBreakInterval;
-	for (let i = 0; i < interval; i++) {
-		dotsWrap.createDiv({
-			cls: 'dashboard-sidebar-pomodoro-dot' + (i < state.completedWorkSessions ? ' dashboard-sidebar-pomodoro-dot--filled' : ''),
-		});
-	}
-
-	// Start/stop button
-	const mainBtn = widget.createEl('button', {
-		cls: 'dashboard-sidebar-pomodoro-main-btn',
-		text: isRunning ? t('pomodoro.stop') : t('pomodoro.startFocus'),
-	});
-	if (isRunning) {
-		mainBtn.addClass('dashboard-sidebar-pomodoro-main-btn--running');
-	}
-
-	// --- Helpers ---
-	function updateRing(remaining: number, total: number): void {
-		const progress = total > 0 ? remaining / total : 1;
-		progressCircle.setAttribute('stroke-dashoffset', String(circumference * (1 - progress)));
-		timeText.textContent = formatTime(remaining);
-	}
-	updateRing(state.remainingSeconds, state.totalSeconds);
-
-	function updateUI(): void {
-		const s = service.getState();
-		updateRing(s.remainingSeconds, s.totalSeconds);
-		const running = s.status === 'running';
-		mainBtn.textContent = running ? t('pomodoro.stop') : t('pomodoro.startFocus');
-		mainBtn.toggleClass('dashboard-sidebar-pomodoro-main-btn--running', running);
-		const dots = dotsWrap.querySelectorAll('.dashboard-sidebar-pomodoro-dot');
-		dots.forEach((dot, i) => dot.toggleClass('dashboard-sidebar-pomodoro-dot--filled', i < s.completedWorkSessions));
-		const tc = service.getTodayCount();
-		statsHintText.textContent = t('pomodoro.today') + ' ' + tc;
-	}
-
-	service.setOnTick(() => {
-		const s = service.getState();
-		updateRing(s.remainingSeconds, s.totalSeconds);
-	});
-
-	service.setOnComplete(() => updateUI());
-
-	mainBtn.addEventListener('click', () => {
-		if (service.getState().status === 'running') {
-			service.reset();
-			updateUI();
-		} else {
-			service.start();
-			updateUI();
-		}
-	});
-
-	const resetBtn = widget.createEl('button', {
-		cls: 'dashboard-sidebar-pomodoro-reset-btn',
-		attr: {
-			type: 'button',
-			'aria-label': t('pomodoro.reset'),
-			title: t('pomodoro.reset'),
-		},
-	});
-	setIcon(resetBtn, 'rotate-ccw');
-	resetBtn.addEventListener('click', (event) => {
-		event.stopPropagation();
-		service.reset();
-		updateUI();
-	});
-
-	statsBtn.addEventListener('click', () => {
-		showPomodoroStats(widget.ownerDocument, service);
-	});
-}
-
-function createActivitySelector(
-	parent: HTMLElement,
-	service: PomodoroService,
-	initialActivity: string,
-): { activityTrigger: HTMLElement; updateActivityDisplay: (name: string) => void } {
-	const wrap = parent.createDiv({ cls: 'dashboard-pomodoro-activity-selector' });
-
-	const trigger = wrap.createDiv({
-		cls: 'dashboard-pomodoro-activity-trigger' + (initialActivity ? ' dashboard-pomodoro-activity-trigger--set' : ''),
-	});
-
-	let colorDot: HTMLElement | null = null;
-	let nameSpan: HTMLElement;
-
-	if (initialActivity) {
-		colorDot = trigger.createDiv({ cls: 'dashboard-pomodoro-activity-color-dot' });
-		colorDot.style.backgroundColor = activityColor(initialActivity);
-		nameSpan = trigger.createSpan({ text: initialActivity });
-	} else {
-		nameSpan = trigger.createSpan({ text: t('pomodoro.activityLabel'), cls: 'dashboard-pomodoro-activity-placeholder' });
-	}
-
-	let panel: HTMLElement | null = null;
-
-	function updateActivityDisplay(name: string): void {
-		trigger.empty();
-		trigger.toggleClass('dashboard-pomodoro-activity-trigger--set', name.length > 0);
-		if (name) {
-			const dot = trigger.createDiv({ cls: 'dashboard-pomodoro-activity-color-dot' });
-			dot.style.backgroundColor = activityColor(name);
-			nameSpan = trigger.createSpan({ text: name });
-		} else {
-			nameSpan = trigger.createSpan({ text: t('pomodoro.activityLabel'), cls: 'dashboard-pomodoro-activity-placeholder' });
-		}
-	}
-
-	function closePanel(): void {
-		if (panel) {
-			panel.remove();
-			panel = null;
-		}
-	}
-
-	function openPanel(): void {
-		closePanel();
-
-		panel = wrap.createDiv({ cls: 'dashboard-pomodoro-activity-panel' });
-
-		const input = panel.createEl('input', {
-			cls: 'dashboard-pomodoro-activity-panel-input',
-			attr: { type: 'text', placeholder: t('pomodoro.inputActivity') },
-		});
-
-		const recentActivities = service.getRecentActivities(6);
-		if (recentActivities.length > 0) {
-			const chipsWrap = panel.createDiv({ cls: 'dashboard-pomodoro-activity-chips' });
-			for (const act of recentActivities) {
-				const chip = chipsWrap.createDiv({ cls: 'dashboard-pomodoro-activity-chip' });
-				const dot = chip.createDiv({ cls: 'dashboard-pomodoro-activity-color-dot' });
-				dot.style.backgroundColor = activityColor(act);
-				chip.createSpan({ text: act });
-				chip.addEventListener('click', (e) => {
-					e.stopPropagation();
-					service.setActivity(act);
-					updateActivityDisplay(act);
-					closePanel();
-				});
-			}
-		}
-
-		input.focus();
-
-		const finish = (save: boolean) => {
-			const val = input.value.trim();
-			if (save && val) {
-				service.setActivity(val);
-				updateActivityDisplay(val);
-			}
-			closePanel();
-		};
-
-		input.addEventListener('keydown', (e: KeyboardEvent) => {
-			if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-			else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-		});
-	}
-
-	trigger.addEventListener('click', (e) => {
-		e.stopPropagation();
-		if (panel) {
-			closePanel();
-		} else {
-			openPanel();
-		}
-	});
-
-	// Close panel when clicking outside
-	const doc = parent.ownerDocument;
-	const onDocClick = (e: MouseEvent) => {
-		if (panel && !panel.contains(e.target as Node) && !trigger.contains(e.target as Node)) {
-			closePanel();
-		}
-	};
-	doc.addEventListener('click', onDocClick);
-
-	return { activityTrigger: trigger, updateActivityDisplay };
-}
-
-export function renderSidebarCountdown(
-	container: HTMLElement,
-	settings: import('./types').DashboardSettings,
-	app: App,
-): void {
-	const widget = container.createDiv({ cls: 'dashboard-sidebar-widget dashboard-sidebar-countdown' });
-
-	// Settings button (absolute positioned)
-	const settingsBtn = widget.createEl('button', {
-		cls: 'dashboard-sidebar-countdown-settings-btn',
-		attr: { 'aria-label': t('countdown.settingsTitle') },
-	});
-	setIcon(settingsBtn, 'settings');
-
-	settingsBtn.addEventListener('click', (e) => {
-		e.stopPropagation();
-		const modal = new CountdownSettingsModal(app, settings, async (updates: Partial<import('./types').DashboardSettings>) => {
-			Object.assign(settings, updates);
-			const plugins = (app as unknown as { plugins: { plugins: Record<string, { settings?: import('./types').DashboardSettings; saveSettings?: () => Promise<void>; refreshAllDashboards?: () => void }> } }).plugins?.plugins;
-			const plugin = plugins?.['apex-dashboard'] ?? plugins?.dashboard;
-			if (plugin?.settings) {
-				Object.assign(plugin.settings!, updates);
-				await plugin.saveSettings?.();
-				plugin.refreshAllDashboards?.();
-			}
-		});
-		modal.open();
-	});
-
-	// Content
-	const content = widget.createDiv({ cls: 'dashboard-sidebar-countdown-content' });
-	const renderContent = () => {
-		content.empty();
-
-		const items = getCountdownItems(settings).filter(item => item.targetDate).slice(0, 3);
-		if (items.length === 0) {
-			content.createDiv({ cls: 'dashboard-sidebar-countdown-placeholder', text: t('countdown.setTarget') });
-			return;
-		}
-
-		for (const item of items) {
-			const row = content.createDiv({ cls: 'dashboard-sidebar-countdown-item' });
-			const target = new Date(item.targetDate + 'T00:00:00');
-			const now = new Date();
-			if (item.label) {
-				row.createDiv({ cls: 'dashboard-sidebar-countdown-until', text: t('countdown.untilLabel', { label: item.label }) });
-			}
-			if (now >= target) {
-				row.createDiv({ cls: 'dashboard-sidebar-countdown-expired', text: t('countdown.expired') });
-				continue;
-			}
-			const currentVal = getCountdownValue(target);
-			const flipWrap = row.createDiv({ cls: 'dashboard-sidebar-countdown-flip' });
-			flipWrap.createDiv({ cls: 'dashboard-sidebar-countdown-value', text: String(currentVal) });
-			flipWrap.createDiv({ cls: 'dashboard-sidebar-countdown-unit', text: t('countdown.days') });
-		}
-	};
-
-	const timer = setInterval(() => {
-		renderContent();
-	}, 60000);
-	renderContent();
-}
-
-function getCountdownValue(target: Date): number {
-	const diff = target.getTime() - Date.now();
-	return Math.ceil(diff / (1000 * 60 * 60 * 24));
-}
-
-function showPomodoroStats(doc: Document, service: PomodoroService): void {
-	const overlay = doc.body.createDiv({ cls: 'dashboard-pomodoro-stats-overlay' });
-	const modal = overlay.createDiv({ cls: 'dashboard-pomodoro-stats-modal' });
-	inheritDashboardThemeVars(modal);
-
-	function close() {
-		doc.removeEventListener('keydown', onKey);
-		overlay.remove();
-	}
-	function onKey(e: KeyboardEvent) {
-		if (e.key === 'Escape') close();
-	}
-	doc.addEventListener('keydown', onKey);
-
-	// Header
-	const header = modal.createDiv({ cls: 'dashboard-pomodoro-stats-header' });
-	header.createDiv({ cls: 'dashboard-pomodoro-stats-header-title', text: t('pomodoro.statsTitle') });
-	const closeBtn = header.createDiv({ cls: 'dashboard-pomodoro-stats-close' });
-	setIcon(closeBtn, 'x');
-	closeBtn.addEventListener('click', () => close());
-	overlay.addEventListener('click', (e) => {
-		if (e.target === overlay) close();
-	});
-
-	// Summary cards
-	const summary = modal.createDiv({ cls: 'dashboard-pomodoro-stats-summary' });
-
-	const totalMin = service.getTotalFocusMinutes();
-	const todayMin = service.getTodayFocusMinutes();
-	const streak = service.getStreak();
-
-	const totalCard = summary.createDiv({ cls: 'dashboard-pomodoro-stats-card' });
-	totalCard.createDiv({ cls: 'dashboard-pomodoro-stats-card-value', text: formatMinutes(totalMin) });
-	totalCard.createDiv({ cls: 'dashboard-pomodoro-stats-card-label', text: t('pomodoro.totalFocus') });
-
-	const todayCard = summary.createDiv({ cls: 'dashboard-pomodoro-stats-card' });
-	todayCard.createDiv({ cls: 'dashboard-pomodoro-stats-card-value', text: formatMinutes(todayMin) });
-	todayCard.createDiv({ cls: 'dashboard-pomodoro-stats-card-label', text: t('pomodoro.todayFocus') });
-
-	const streakCard = summary.createDiv({ cls: 'dashboard-pomodoro-stats-card' });
-	streakCard.createDiv({ cls: 'dashboard-pomodoro-stats-card-value', text: String(streak) });
-	streakCard.createDiv({ cls: 'dashboard-pomodoro-stats-card-label', text: t('pomodoro.streakDays') });
-
-	// Donut chart section with range toggle
-	const donutSection = modal.createDiv({ cls: 'dashboard-pomodoro-stats-section' });
-
-	// Range toggle: Day / Week / Month
-	const rangeToggle = donutSection.createDiv({ cls: 'dashboard-pomodoro-range-toggle' });
-	const ranges: { key: string; label: string; days: number }[] = [
-		{ key: 'day', label: t('pomodoro.rangeDay'), days: 1 },
-		{ key: 'week', label: t('pomodoro.rangeWeek'), days: 7 },
-		{ key: 'month', label: t('pomodoro.rangeMonth'), days: 30 },
-	];
-	let activeRange = 'week';
-
-	const toggleButtons = ranges.map(r => {
-		const btn = rangeToggle.createDiv({
-			cls: 'dashboard-pomodoro-range-btn' + (r.key === activeRange ? ' dashboard-pomodoro-range-btn--active' : ''),
-			text: r.label,
-		});
-		return btn;
-	});
-
-	// Donut chart container
-	const donutContainer = donutSection.createDiv({ cls: 'dashboard-pomodoro-donut-container' });
-
-	function renderDonut(rangeKey: string): void {
-		donutContainer.empty();
-
-		const rangeInfo = ranges.find(r => r.key === rangeKey);
-		if (!rangeInfo) return;
-
-		const breakdown = service.getActivityBreakdownByRange(rangeInfo.days);
-		const sorted = [...breakdown.entries()].sort((a, b) => b[1] - a[1]);
-		const totalRangeMin = sorted.reduce((sum, [, m]) => sum + m, 0);
-
-		if (totalRangeMin === 0) {
-			donutContainer.createDiv({ cls: 'dashboard-pomodoro-donut-empty', text: t('pomodoro.noRecords') });
-			return;
-		}
-
-		// SVG donut chart
-		const size = 160;
-		const strokeWidth = 28;
-		const donutR = (size - strokeWidth) / 2;
-		const circumference = 2 * Math.PI * donutR;
-
-		const svg = donutContainer.createSvg('svg', {
-			cls: 'dashboard-pomodoro-donut-svg',
-			attr: { viewBox: `0 0 ${size} ${size}`, width: String(size), height: String(size) },
-		});
-
-		// Background circle
-		svg.createSvg('circle', {
-			attr: { cx: size / 2, cy: size / 2, r: donutR, fill: 'none', 'stroke-width': strokeWidth },
-			cls: 'dashboard-pomodoro-donut-bg',
-		});
-
-		// Draw arcs
-		let offset = 0;
-		const gap = sorted.length > 1 ? 3 : 0;
-		for (const [name, mins] of sorted) {
-			const pct = mins / totalRangeMin;
-			const dashLen = Math.max(0, circumference * pct - gap);
-			const circle = svg.createSvg('circle', {
-				cls: 'dashboard-pomodoro-donut-segment',
-				attr: {
-					cx: size / 2, cy: size / 2, r: donutR, fill: 'none',
-					'stroke-width': strokeWidth,
-					'stroke-dasharray': `${dashLen} ${circumference - dashLen}`,
-					'stroke-dashoffset': String(-offset),
-					transform: `rotate(-90 ${size / 2} ${size / 2})`,
-					'stroke-linecap': 'butt',
-				},
-			});
-			circle.style.stroke = activityColor(name);
-			offset += dashLen + gap;
-		}
-
-		// Center text: total time
-		const centerValue = svg.createSvg('text', {
-			attr: {
-				x: size / 2, y: size / 2 - 6,
-				'text-anchor': 'middle', 'dominant-baseline': 'middle',
-			},
-			cls: 'dashboard-pomodoro-donut-center-value',
-		});
-		centerValue.textContent = formatMinutes(totalRangeMin);
-
-		const centerLabel = svg.createSvg('text', {
-			attr: {
-				x: size / 2, y: size / 2 + 14,
-				'text-anchor': 'middle', 'dominant-baseline': 'middle',
-			},
-			cls: 'dashboard-pomodoro-donut-center-label',
-		});
-		centerLabel.textContent = rangeInfo.label;
-
-		// Legend with percentages
-		const legend = donutContainer.createDiv({ cls: 'dashboard-pomodoro-donut-legend' });
-		for (const [name, mins] of sorted) {
-			const pct = Math.round((mins / totalRangeMin) * 100);
-			const item = legend.createDiv({ cls: 'dashboard-pomodoro-donut-legend-item' });
-			const dot = item.createDiv({ cls: 'dashboard-pomodoro-donut-legend-dot' });
-			dot.style.backgroundColor = activityColor(name);
-			item.createDiv({ cls: 'dashboard-pomodoro-donut-legend-name', text: name });
-			item.createDiv({ cls: 'dashboard-pomodoro-donut-legend-pct', text: pct + '%' });
-			item.createDiv({ cls: 'dashboard-pomodoro-donut-legend-time', text: formatMinutes(mins) });
-		}
-	}
-
-	// Toggle handlers
-	toggleButtons.forEach((btn, i) => {
-		btn.addEventListener('click', () => {
-			activeRange = ranges[i]!.key;
-			toggleButtons.forEach((b, j) => b.toggleClass('dashboard-pomodoro-range-btn--active', j === i));
-			renderDonut(activeRange);
-		});
-	});
-
-	renderDonut(activeRange);
-
-	// Recent sessions with activity color dots
-	const recentRecords = service.getRecentRecords(10);
-	if (recentRecords.length > 0) {
-		const recentSection = modal.createDiv({ cls: 'dashboard-pomodoro-stats-section' });
-		recentSection.createDiv({ cls: 'dashboard-pomodoro-stats-section-title', text: t('pomodoro.recentSessions') });
-		for (const rec of recentRecords) {
-			const row = recentSection.createDiv({ cls: 'dashboard-pomodoro-stats-record-row' });
-			const actDot = row.createDiv({ cls: 'dashboard-pomodoro-stats-record-dot' });
-			actDot.style.backgroundColor = activityColor(rec.activity || t('pomodoro.defaultActivity'));
-			const ts = new Date(rec.timestamp);
-			const dateStr = ts.getMonth() + 1 + '/' + ts.getDate() + ' ' +
-				String(ts.getHours()).padStart(2, '0') + ':' + String(ts.getMinutes()).padStart(2, '0');
-			row.createDiv({ cls: 'dashboard-pomodoro-stats-record-date', text: dateStr });
-			row.createDiv({ cls: 'dashboard-pomodoro-stats-record-activity', text: rec.activity });
-			row.createDiv({ cls: 'dashboard-pomodoro-stats-record-duration', text: rec.duration + ' min' });
-		}
-	}
-}
-
-function formatMinutes(minutes: number): string {
-	if (minutes < 60) {
-		return t('pomodoro.minutes', { count: minutes });
-	}
-	const hours = Math.floor(minutes / 60);
-	const mins = minutes % 60;
-	if (mins === 0) return t('pomodoro.hours', { count: hours });
-	return t('pomodoro.hours', { count: hours }) + ' ' + t('pomodoro.minutes', { count: mins });
-}
-
-
-function formatTime(seconds: number): string {
-	if (seconds >= 3600) {
-		const h = Math.floor(seconds / 3600);
-		const m = Math.floor((seconds % 3600) / 60);
-		const s = seconds % 60;
-		return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-	}
-	const m = Math.floor(seconds / 60);
-	const s = seconds % 60;
-	return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function formatReadingDuration(totalSeconds: number): string {
-	const hours = Math.floor(totalSeconds / 3600);
-	const mins = Math.floor((totalSeconds % 3600) / 60);
-	if (hours > 0 && mins > 0) return t('reading.timeHM', { h: hours, m: mins });
-	if (hours > 0) return t('reading.hours', { count: hours });
-	return t('reading.minutes', { count: Math.max(1, mins) });
-}
-
-function formatShortDuration(totalSeconds: number): string {
-	const h = Math.floor(totalSeconds / 3600);
-	const m = Math.floor((totalSeconds % 3600) / 60);
-	if (h > 0) return `${h}h${m > 0 ? m + 'm' : ''}`;
-	return `${Math.max(1, m)}m`;
-}
-
-export function renderSidebarReading(
-	container: HTMLElement,
-	service: ReadingService,
-): void {
-	const widget = container.createDiv({ cls: 'dashboard-sidebar-widget dashboard-sidebar-reading' });
-
-	// Title row
-	const titleRow = widget.createDiv({ cls: 'dashboard-reading-title-row' });
-	titleRow.createDiv({ cls: 'dashboard-reading-title', text: t('reading.title') });
-	titleRow.createDiv({ cls: 'dashboard-reading-title-spacer' });
-	const addBtn = titleRow.createDiv({ cls: 'dashboard-reading-add-btn' });
-	setIcon(addBtn, 'plus');
-	const statsBtn = titleRow.createDiv({ cls: 'dashboard-reading-stats-btn' });
-	setIcon(statsBtn, 'bar-chart-2');
-
-	// Book cards scroll area
-	const scrollArea = widget.createDiv({ cls: 'dashboard-reading-scroll' });
-
-	const state = service.getState();
-	const activeBooks = service.getActiveBooks();
-
-	for (const book of activeBooks) {
-		const isActive = state.status !== 'idle' && state.currentBook?.title === book.title;
-		const isRunning = isActive && state.status === 'running';
-		const card = scrollArea.createDiv({
-			cls: 'dashboard-reading-book-card' + (isActive ? ' dashboard-reading-book-card--active' : ''),
-		});
-
-		// Cover - always show title fallback, async load real cover
-		const coverWrap = card.createDiv({ cls: 'dashboard-reading-book-card-cover-wrap' });
-		const placeholder = coverWrap.createDiv({ cls: 'dashboard-reading-book-card-cover-placeholder' });
-		placeholder.textContent = book.title.length > 8 ? book.title.slice(0, 8) + '..' : book.title;
-		if (book.coverUrl) {
-			downloadCoverAsBlobUrl(book.coverUrl).then(blobUrl => {
-				if (blobUrl) {
-					placeholder.style.display = 'none';
-					coverWrap.style.backgroundImage = `url(${blobUrl})`;
-				}
-			});
-		}
-
-		// Info area
-		const info = card.createDiv({ cls: 'dashboard-reading-book-card-info' });
-		info.createDiv({ cls: 'dashboard-reading-book-card-title', text: book.title });
-		if (book.author) {
-			info.createDiv({ cls: 'dashboard-reading-book-card-author', text: book.author });
-		}
-
-		// Timer row
-		const timerRow = info.createDiv({ cls: 'dashboard-reading-book-card-timer' });
-
-		if (isActive) {
-			timerRow.createDiv({
-				cls: 'dashboard-reading-book-card-time dashboard-reading-book-card-time--active',
-				text: formatTime(state.elapsedSeconds),
-			});
-		} else {
-			const todaySec = service.getTodaySecondsForBook(book.title);
-			timerRow.createDiv({
-				cls: 'dashboard-reading-book-card-time',
-				text: todaySec > 0 ? formatShortDuration(todaySec) : '--',
-			});
-		}
-
-		// Play/pause/stop buttons
-		const actions = timerRow.createDiv({ cls: 'dashboard-reading-book-card-actions' });
-
-		if (isRunning) {
-			const pauseBtn = actions.createDiv({ cls: 'dashboard-reading-book-card-btn dashboard-reading-book-card-btn--pause' });
-			setIcon(pauseBtn, 'pause');
-			pauseBtn.addEventListener('click', (e) => { e.stopPropagation(); service.pause(); refreshCards(); });
-			const stopBtn = actions.createDiv({ cls: 'dashboard-reading-book-card-btn dashboard-reading-book-card-btn--stop' });
-			setIcon(stopBtn, 'square');
-			stopBtn.addEventListener('click', (e) => { e.stopPropagation(); service.pause(); showEndModal(book); });
-		} else if (isActive && state.status === 'paused') {
-			const resumeBtn = actions.createDiv({ cls: 'dashboard-reading-book-card-btn dashboard-reading-book-card-btn--play' });
-			setIcon(resumeBtn, 'play');
-			resumeBtn.addEventListener('click', (e) => { e.stopPropagation(); service.resume(); refreshCards(); });
-			const stopBtn = actions.createDiv({ cls: 'dashboard-reading-book-card-btn dashboard-reading-book-card-btn--stop' });
-			setIcon(stopBtn, 'square');
-			stopBtn.addEventListener('click', (e) => { e.stopPropagation(); showEndModal(book); });
-		} else {
-			const playBtn = actions.createDiv({ cls: 'dashboard-reading-book-card-btn dashboard-reading-book-card-btn--play' });
-			setIcon(playBtn, 'play');
-			playBtn.addEventListener('click', (e) => { e.stopPropagation(); service.startReading(book); refreshCards(); });
-		}
-
-		// Progress bar
-		if (book.totalPages > 0) {
-			const progressWrap = info.createDiv({ cls: 'dashboard-reading-book-card-progress' });
-			const pct = book.finished ? 100 : Math.min(100, Math.round((book.currentPage / book.totalPages) * 100));
-			const progressBar = progressWrap.createDiv({ cls: 'dashboard-reading-book-card-progress-bar' });
-			progressBar.createDiv({
-				cls: 'dashboard-reading-book-card-progress-fill' + (book.finished ? ' dashboard-reading-book-card-progress-fill--done' : ''),
-				attr: { style: `width:${pct}%` },
-			});
-			progressWrap.createDiv({
-				cls: 'dashboard-reading-book-card-progress-text',
-				text: book.finished ? '100%' : `${book.currentPage}/${book.totalPages}`,
-			});
-		}
-
-		// Action buttons (edit / remove)
-		const editBtn = card.createDiv({ cls: 'dashboard-reading-book-card-action dashboard-reading-book-card-edit' });
-		setIcon(editBtn, 'pencil');
-		editBtn.addEventListener('click', (e) => {
-			e.stopPropagation();
-			openEditBookInfo(widget.ownerDocument, service, book, () => refreshCards());
-		});
-
-		const removeBtn = card.createDiv({ cls: 'dashboard-reading-book-card-action dashboard-reading-book-card-remove' });
-		setIcon(removeBtn, 'x');
-		removeBtn.addEventListener('click', (e) => {
-			e.stopPropagation();
-			service.removeActiveBook(book.title).then(() => refreshCards());
-		});
-	}
-
-	// Timer tick - update active timer display
-	service.setOnTick(() => {
-		const s = service.getState();
-		if (s.status === 'running') {
-			const activeTime = scrollArea.querySelector('.dashboard-reading-book-card-time--active');
-			if (activeTime) activeTime.textContent = formatTime(s.elapsedSeconds);
-		}
-	});
-
-	addBtn.addEventListener('click', () => {
-		openBookSearch(widget.ownerDocument, service, (book) => {
-			if (book) service.addActiveBook(book).then(() => refreshCards());
-		});
-	});
-
-	statsBtn.addEventListener('click', () => {
-		showReadingStats(widget.ownerDocument, service);
-	});
-
-	function showEndModal(book: import('./reading-service').BookInfo): void {
-		const elapsed = service.getElapsedSeconds();
-		openEndReadingModal(widget.ownerDocument, service, book, elapsed, () => refreshCards());
-	}
-
-	function refreshCards(): void {
-		service.setOnTick(null);
-		const parent = widget.parentElement!;
-		widget.remove();
-		renderSidebarReading(parent, service);
-	}
-}
-
-function openEndReadingModal(
-	doc: Document,
-	service: ReadingService,
-	book: import('./reading-service').BookInfo,
-	elapsedSeconds: number,
-	onDone: () => void,
-): void {
-	const overlay = doc.body.createDiv({ cls: 'dashboard-reading-end-overlay' });
-	const modal = overlay.createDiv({ cls: 'dashboard-reading-end-modal' });
-
-	function close() {
-		doc.removeEventListener('keydown', onKey);
-		overlay.remove();
-	}
-	function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-	doc.addEventListener('keydown', onKey);
-	overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-	// Header
-	const header = modal.createDiv({ cls: 'dashboard-reading-end-header' });
-	header.createDiv({ cls: 'dashboard-reading-end-title', text: t('reading.endTitle') });
-	const closeBtn = header.createDiv({ cls: 'dashboard-reading-end-close' });
-	setIcon(closeBtn, 'x');
-	closeBtn.addEventListener('click', close);
-
-	// Body
-	const body = modal.createDiv({ cls: 'dashboard-reading-end-body' });
-
-	// Date row
-	const dateRow = body.createDiv({ cls: 'dashboard-reading-end-row' });
-	dateRow.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.endDate') });
-	const now = new Date();
-	dateRow.createDiv({
-		cls: 'dashboard-reading-end-value',
-		text: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`,
-	});
-
-	// Duration row
-	const durRow = body.createDiv({ cls: 'dashboard-reading-end-row' });
-	durRow.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.endDuration') });
-	durRow.createDiv({ cls: 'dashboard-reading-end-value', text: formatReadingDuration(elapsedSeconds) });
-
-	// Progress section
-	const progressSection = body.createDiv({ cls: 'dashboard-reading-end-section' });
-	progressSection.createDiv({ cls: 'dashboard-reading-end-section-title', text: t('reading.endProgress') });
-
-	// Mode toggle: page / percentage
-	let progressMode: 'page' | 'pct' = book.totalPages > 0 ? 'page' : 'pct';
-	const modeToggle = progressSection.createDiv({ cls: 'dashboard-reading-end-mode-toggle' });
-	const pageModeBtn = modeToggle.createDiv({
-		cls: 'dashboard-reading-end-mode-btn' + (progressMode === 'page' ? ' dashboard-reading-end-mode-btn--active' : ''),
-		text: t('reading.endModePage'),
-	});
-	const pctModeBtn = modeToggle.createDiv({
-		cls: 'dashboard-reading-end-mode-btn' + (progressMode === 'pct' ? ' dashboard-reading-end-mode-btn--active' : ''),
-		text: t('reading.endModePct'),
-	});
-
-	// Inputs container
-	const inputsContainer = progressSection.createDiv({ cls: 'dashboard-reading-end-inputs' });
-
-	function renderInputs(): void {
-		inputsContainer.empty();
-		const pageRow = inputsContainer.createDiv({ cls: 'dashboard-reading-end-page-row' });
-
-		// Start value (readonly)
-		const startCol = pageRow.createDiv({ cls: 'dashboard-reading-end-page-col' });
-		startCol.createDiv({ cls: 'dashboard-reading-end-page-label', text: t('reading.endStartPage') });
-		const startVal = progressMode === 'pct'
-			? (book.totalPages > 0 ? Math.round((book.currentPage / book.totalPages) * 100) : 0)
-			: book.currentPage;
-		const suffix = progressMode === 'pct' ? '%' : '';
-		startCol.createDiv({ cls: 'dashboard-reading-end-page-readonly', text: `${startVal}${suffix}` });
-
-		pageRow.createDiv({ cls: 'dashboard-reading-end-page-arrow' });
-
-		// End value (input)
-		const endCol = pageRow.createDiv({ cls: 'dashboard-reading-end-page-col' });
-		endCol.createDiv({ cls: 'dashboard-reading-end-page-label', text: t('reading.endEndPage') });
-		const endInput = endCol.createEl('input', {
-			cls: 'dashboard-reading-end-page-input',
-			attr: {
-				type: 'number',
-				min: '0',
-				max: progressMode === 'pct' ? '100' : '',
-				placeholder: progressMode === 'pct' ? '0%' : '0',
-			},
-		});
-		endInput.focus();
-
-		// Total pages row (page mode, unknown total)
-		if (progressMode === 'page' && !book.totalPages) {
-			const totalRow = inputsContainer.createDiv({ cls: 'dashboard-reading-end-total-row' });
-			totalRow.createDiv({ cls: 'dashboard-reading-end-page-label', text: t('reading.endTotalPages') });
-			totalRow.createEl('input', {
-				cls: 'dashboard-reading-end-page-input dashboard-reading-end-page-input--total',
-				attr: { type: 'number', min: '0', placeholder: '?' },
-			});
-		}
-	}
-	renderInputs();
-
-	pageModeBtn.addEventListener('click', () => {
-		progressMode = 'page';
-		pageModeBtn.addClass('dashboard-reading-end-mode-btn--active');
-		pctModeBtn.removeClass('dashboard-reading-end-mode-btn--active');
-		renderInputs();
-	});
-	pctModeBtn.addEventListener('click', () => {
-		progressMode = 'pct';
-		pctModeBtn.addClass('dashboard-reading-end-mode-btn--active');
-		pageModeBtn.removeClass('dashboard-reading-end-mode-btn--active');
-		renderInputs();
-	});
-
-	// Finished checkbox
-	const finishedRow = body.createDiv({ cls: 'dashboard-reading-end-finished' });
-	const checkbox = finishedRow.createEl('input', {
-		cls: 'dashboard-reading-end-checkbox',
-		attr: { type: 'checkbox', id: 'reading-finished' },
-	});
-	const checkLabel = finishedRow.createEl('label', {
-		cls: 'dashboard-reading-end-checkbox-label',
-		attr: { for: 'reading-finished' },
-	});
-	checkLabel.textContent = t('reading.endMarkFinished');
-
-	// Footer
-	const footer = modal.createDiv({ cls: 'dashboard-reading-end-footer' });
-
-	footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--cancel',
-		text: t('reading.endCancel'),
-	}).addEventListener('click', close);
-
-	footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--discard',
-		text: t('reading.endDiscard'),
-	}).addEventListener('click', () => {
-		service.discardSession();
-		close();
-		onDone();
-	});
-
-	footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--confirm',
-		text: t('reading.endConfirm'),
-	}).addEventListener('click', async () => {
-		const endInput = inputsContainer.querySelector('.dashboard-reading-end-page-input:not(.dashboard-reading-end-page-input--total)') as HTMLInputElement | null;
-		const totalInput = inputsContainer.querySelector('.dashboard-reading-end-page-input--total') as HTMLInputElement | null;
-		const endVal = parseInt(endInput?.value || '0') || 0;
-		const finished = checkbox.checked;
-
-		let endPage: number;
-		let totalPages = book.totalPages;
-
-		if (progressMode === 'pct') {
-			if (totalPages > 0) {
-				endPage = Math.round((Math.min(endVal, 100) / 100) * totalPages);
-			} else {
-				endPage = Math.min(endVal, 100);
-				totalPages = 100;
-			}
-		} else {
-			endPage = endVal;
-			if (totalInput) {
-				totalPages = parseInt(totalInput.value) || 0;
-			}
-		}
-
-		await service.finishSession(endPage, totalPages, finished);
-		close();
-		onDone();
-	});
-}
-
-function openEditBookInfo(
-	doc: Document,
-	service: ReadingService,
-	book: import('./reading-service').BookInfo,
-	onDone: () => void,
-): void {
-	const overlay = doc.body.createDiv({ cls: 'dashboard-reading-end-overlay' });
-	const modal = overlay.createDiv({ cls: 'dashboard-reading-end-modal' });
-
-	function close() {
-		doc.removeEventListener('keydown', onKey);
-		overlay.remove();
-	}
-	function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-	doc.addEventListener('keydown', onKey);
-	overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-	const header = modal.createDiv({ cls: 'dashboard-reading-end-header' });
-	header.createDiv({ cls: 'dashboard-reading-end-title', text: t('reading.editTitle') });
-	const closeBtn = header.createDiv({ cls: 'dashboard-reading-end-close' });
-	setIcon(closeBtn, 'x');
-	closeBtn.addEventListener('click', close);
-
-	const body = modal.createDiv({ cls: 'dashboard-reading-end-body' });
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editBookName') });
-	const titleInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'text' },
-	});
-	titleInput.value = book.title;
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editAuthorName') });
-	const authorInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'text' },
-	});
-	authorInput.value = book.author;
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editTotalPages') });
-	const pagesInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'number', min: '0' },
-	});
-	pagesInput.value = String(book.totalPages || '');
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editCoverUrl') });
-	const coverInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'text', placeholder: t('reading.editCoverPlaceholder') },
-	});
-	coverInput.value = book.coverUrl;
-
-	const footer = modal.createDiv({ cls: 'dashboard-reading-end-footer' });
-	const saveBtn = footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--confirm',
-		text: t('reading.editConfirm'),
-	});
-	footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--cancel',
-		text: t('reading.endCancel'),
-	}).addEventListener('click', close);
-
-	const deleteBtn = footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--delete',
-		text: t('reading.editDeleteBook'),
-	});
-	deleteBtn.addEventListener('click', async () => {
-		await service.removeActiveBook(book.title);
-		close();
-		onDone();
-	});
-
-	saveBtn.addEventListener('click', async () => {
-		const newTitle = titleInput.value.trim();
-		if (!newTitle) return;
-
-		await service.updateBookInfo(book.title, {
-			title: newTitle,
-			author: authorInput.value.trim(),
-			coverUrl: coverInput.value.trim(),
-			totalPages: parseInt(pagesInput.value) || 0,
-		});
-		close();
-		onDone();
-	});
-
-	titleInput.focus();
-}
-
-function openBookSearch(
-	doc: Document,
-	service: ReadingService,
-	onSelect: (book: import('./reading-service').BookInfo | null) => void,
-): void {
-	const overlay = doc.body.createDiv({ cls: 'dashboard-reading-book-overlay' });
-	const modal = overlay.createDiv({ cls: 'dashboard-reading-end-modal' });
-
-	function close() {
-		doc.removeEventListener('keydown', onKey);
-		overlay.remove();
-	}
-	function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-	doc.addEventListener('keydown', onKey);
-
-	overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-	const header = modal.createDiv({ cls: 'dashboard-reading-end-header' });
-	header.createDiv({ cls: 'dashboard-reading-end-title', text: t('reading.selectBook') });
-	const closeBtn = header.createDiv({ cls: 'dashboard-reading-end-close' });
-	setIcon(closeBtn, 'x');
-	closeBtn.addEventListener('click', close);
-
-	const body = modal.createDiv({ cls: 'dashboard-reading-end-body' });
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editBookName') });
-	const titleInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'text', placeholder: t('reading.manualPlaceholder') },
-	});
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editAuthorName') });
-	const authorInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'text' },
-	});
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editTotalPages') });
-	const pagesInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'number', min: '0' },
-	});
-
-	body.createDiv({ cls: 'dashboard-reading-end-label', text: t('reading.editCoverUrl') });
-	const coverInput = body.createEl('input', {
-		cls: 'dashboard-reading-end-input',
-		attr: { type: 'text', placeholder: t('reading.editCoverPlaceholder') },
-	});
-
-	const footer = modal.createDiv({ cls: 'dashboard-reading-end-footer' });
-	footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--cancel',
-		text: t('reading.endCancel'),
-	}).addEventListener('click', close);
-	footer.createEl('button', {
-		cls: 'dashboard-reading-end-btn dashboard-reading-end-btn--confirm',
-		text: t('reading.editConfirm'),
-	}).addEventListener('click', () => {
-		const title = titleInput.value.trim();
-		if (!title) return;
-		onSelect({
-			title,
-			author: authorInput.value.trim(),
-			coverUrl: coverInput.value.trim(),
-			isbn: '',
-			source: 'manual',
-			currentPage: 0,
-			totalPages: parseInt(pagesInput.value, 10) || 0,
-			finished: false,
-		});
-		close();
-	});
-
-	titleInput.focus();
-}
-
-function showReadingStats(doc: Document, service: ReadingService): void {
-	const overlay = doc.body.createDiv({ cls: 'dashboard-pomodoro-stats-overlay' });
-	const modal = overlay.createDiv({ cls: 'dashboard-pomodoro-stats-modal' });
-	inheritDashboardThemeVars(modal);
-
-	function close() {
-		doc.removeEventListener('keydown', onKey);
-		overlay.remove();
-	}
-	function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
-	doc.addEventListener('keydown', onKey);
-	overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-	const header = modal.createDiv({ cls: 'dashboard-pomodoro-stats-header' });
-	header.createDiv({ cls: 'dashboard-pomodoro-stats-header-title', text: t('reading.statsTitle') });
-	const closeBtn = header.createDiv({ cls: 'dashboard-pomodoro-stats-close' });
-	setIcon(closeBtn, 'x');
-	closeBtn.addEventListener('click', close);
-
-	const content = modal.createDiv({ cls: 'dashboard-reading-stats-content' });
-
-	function renderContent(): void {
-		content.empty();
-
-		// Summary card
-		const summaryCard = content.createDiv({ cls: 'dashboard-reading-stats-card' });
-		const summaryGrid = summaryCard.createDiv({ cls: 'dashboard-reading-stats-summary' });
-		const totalItem = summaryGrid.createDiv({ cls: 'dashboard-reading-stats-summary-item' });
-		totalItem.createDiv({ cls: 'dashboard-reading-stats-summary-value', text: formatReadingDuration(service.getTotalSeconds()) });
-		totalItem.createDiv({ cls: 'dashboard-reading-stats-summary-label', text: t('reading.totalReading') });
-		const todayItem = summaryGrid.createDiv({ cls: 'dashboard-reading-stats-summary-item' });
-		todayItem.createDiv({ cls: 'dashboard-reading-stats-summary-value', text: formatReadingDuration(service.getTodaySeconds()) });
-		todayItem.createDiv({ cls: 'dashboard-reading-stats-summary-label', text: t('reading.todayReading') });
-		const bookItem = summaryGrid.createDiv({ cls: 'dashboard-reading-stats-summary-item' });
-		bookItem.createDiv({ cls: 'dashboard-reading-stats-summary-value', text: String(service.getBookCountInRange(365)) });
-		bookItem.createDiv({ cls: 'dashboard-reading-stats-summary-label', text: t('reading.bookCount') });
-		const streakItem = summaryGrid.createDiv({ cls: 'dashboard-reading-stats-summary-item' });
-		streakItem.createDiv({ cls: 'dashboard-reading-stats-summary-value', text: String(service.getStreak()) });
-		streakItem.createDiv({ cls: 'dashboard-reading-stats-summary-label', text: t('reading.streakDays') });
-
-		// Book list card
-		const bookCard = content.createDiv({ cls: 'dashboard-reading-stats-card' });
-		bookCard.createDiv({ cls: 'dashboard-reading-stats-card-title', text: t('reading.bookList') });
-		const rangeToggle = bookCard.createDiv({ cls: 'dashboard-reading-stats-range' });
-		const ranges: { key: string; label: string; days: number }[] = [
-			{ key: 'week', label: t('reading.rangeWeek'), days: 7 },
-			{ key: 'month', label: t('reading.rangeMonth'), days: 30 },
-			{ key: 'year', label: t('reading.rangeYear'), days: 365 },
-		];
-		let activeRange = 'month';
-		const toggleButtons = ranges.map(r => rangeToggle.createDiv({
-			cls: 'dashboard-reading-stats-range-btn' + (r.key === activeRange ? ' dashboard-reading-stats-range-btn--active' : ''),
-			text: r.label,
-		}));
-		const bookListContainer = bookCard.createDiv({ cls: 'dashboard-reading-book-list' });
-
-		function renderBookList(rangeKey: string): void {
-			bookListContainer.empty();
-			const rangeInfo = ranges.find(r => r.key === rangeKey);
-			if (!rangeInfo) return;
-			const books = service.getBookBreakdownInRange(rangeInfo.days);
-			if (books.length === 0) {
-				bookListContainer.createDiv({ cls: 'dashboard-reading-stats-empty', text: t('reading.noRecords') });
-				return;
-			}
-			for (const book of books) {
-				const row = bookListContainer.createDiv({ cls: 'dashboard-reading-book-list-row' });
-				if (book.coverUrl) {
-					const c = row.createDiv({ cls: 'dashboard-reading-book-list-cover' });
-					downloadCoverAsBlobUrl(book.coverUrl).then(url => {
-						if (url) c.style.backgroundImage = `url(${url})`;
-					});
-				} else {
-					row.createDiv({ cls: 'dashboard-reading-book-list-nocover' });
-				}
-				const info = row.createDiv({ cls: 'dashboard-reading-book-list-info' });
-				info.createDiv({ cls: 'dashboard-reading-book-list-title', text: book.title });
-				if (book.author) info.createDiv({ cls: 'dashboard-reading-book-list-author', text: book.author });
-				const meta = row.createDiv({ cls: 'dashboard-reading-book-list-meta' });
-				meta.createDiv({ cls: 'dashboard-reading-book-list-duration', text: formatReadingDuration(book.totalSeconds) });
-				meta.createDiv({ cls: 'dashboard-reading-book-list-sessions', text: t('reading.times', { count: book.sessions }) });
-				const del = meta.createDiv({ cls: 'dashboard-reading-stats-record-del' });
-				setIcon(del, 'trash-2');
-				del.addEventListener('click', async (e) => {
-					e.stopPropagation();
-					await service.deleteBookRecords(book.title);
-					renderBookList(rangeKey);
-				});
-			}
-		}
-		toggleButtons.forEach((btn, i) => {
-			btn.addEventListener('click', () => {
-				activeRange = ranges[i]!.key;
-				toggleButtons.forEach((b, j) => b.toggleClass('dashboard-reading-stats-range-btn--active', j === i));
-				renderBookList(activeRange);
-			});
-		});
-		renderBookList(activeRange);
-
-		// Recent records card
-		const recentRecords = service.getRecentRecords(10);
-		if (recentRecords.length > 0) {
-			const recentCard = content.createDiv({ cls: 'dashboard-reading-stats-card' });
-			recentCard.createDiv({ cls: 'dashboard-reading-stats-card-title', text: t('reading.recentRecords') });
-			for (const rec of recentRecords) {
-				const row = recentCard.createDiv({ cls: 'dashboard-reading-stats-record' });
-				const ts = new Date(rec.timestamp);
-				const dateText = `${ts.getMonth() + 1}/${ts.getDate()} ${String(ts.getHours()).padStart(2, '0')}:${String(ts.getMinutes()).padStart(2, '0')}`;
-				row.createDiv({ cls: 'dashboard-reading-stats-record-date', text: dateText });
-				row.createDiv({ cls: 'dashboard-reading-stats-record-book', text: rec.bookTitle });
-				row.createDiv({ cls: 'dashboard-reading-stats-record-dur', text: formatReadingDuration(rec.durationSeconds) });
-				const del = row.createDiv({ cls: 'dashboard-reading-stats-record-del' });
-				setIcon(del, 'trash-2');
-				del.addEventListener('click', async (e) => {
-					e.stopPropagation();
-					await service.deleteRecord(rec.timestamp);
-					renderContent();
-				});
-			}
-		}
-	}
-
-	renderContent();
-}
-
-
-
 export function renderDashboard(
 	container: HTMLElement,
 	data: DashboardData,
@@ -1437,8 +109,9 @@ export function renderDashboard(
 	container.empty();
 	container.addClass('dashboard-kanban');
 
-	for (const column of data.columns) {
-		const section = renderSection(column, callbacks, app, data, settings);
+	for (const original of data.columns) {
+		const column = { ...original, cards: original.cards.filter(card => card.type !== 'weather') };
+		const section = renderDashboardSection(column, callbacks, app, data, settings);
 		container.appendChild(section);
 	}
 
@@ -1463,7 +136,6 @@ export function renderDashboard(
 			{ value: 'projects', label: t('renderer.typeNotes') },
 			{ value: 'todo', label: t('renderer.typeTodo') },
 			{ value: 'memo', label: t('renderer.typeMemo') },
-			{ value: 'notes', label: t('renderer.typeNotesPlain') },
 			{ value: 'library', label: t('renderer.typeLibrary') },
 			{ value: 'heatmap', label: t('renderer.typeHeatmap') },
 		];
@@ -1536,35 +208,38 @@ export function renderDashboard(
 	});
 }
 
-const COLLAPSED_KEY = 'apex-dashboard-collapsed';
-const SHOW_ARCHIVED_KEY = 'apex-dashboard-show-archived';
-
-function getCollapsedSections(): Set<string> {
+function getCollapsedSections(app: App): Set<string> {
 	try {
-		const raw = localStorage.getItem(COLLAPSED_KEY);
-		if (!raw) return new Set();
+		const raw: unknown = app.loadLocalStorage(COLLAPSED_STORAGE_KEY)
+			?? window.localStorage.getItem(COLLAPSED_STORAGE_KEY)
+			?? app.loadLocalStorage(LEGACY_COLLAPSED_STORAGE_KEY)
+			?? window.localStorage.getItem(LEGACY_COLLAPSED_STORAGE_KEY);
+		if (typeof raw !== 'string' || !raw) return new Set();
 		return new Set(JSON.parse(raw) as string[]);
 	} catch {
 		return new Set();
 	}
 }
 
-function saveCollapsedSections(collapsed: Set<string>): void {
-	localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+function saveCollapsedSections(app: App, collapsed: Set<string>): void {
+	app.saveLocalStorage(COLLAPSED_STORAGE_KEY, JSON.stringify([...collapsed]));
 }
 
-function getShowArchivedSections(): Set<string> {
+function getShowArchivedSections(app: App): Set<string> {
 	try {
-		const raw = localStorage.getItem(SHOW_ARCHIVED_KEY);
-		if (!raw) return new Set();
+		const raw: unknown = app.loadLocalStorage(SHOW_ARCHIVED_STORAGE_KEY)
+			?? window.localStorage.getItem(SHOW_ARCHIVED_STORAGE_KEY)
+			?? app.loadLocalStorage(LEGACY_SHOW_ARCHIVED_STORAGE_KEY)
+			?? window.localStorage.getItem(LEGACY_SHOW_ARCHIVED_STORAGE_KEY);
+		if (typeof raw !== 'string' || !raw) return new Set();
 		return new Set(JSON.parse(raw) as string[]);
 	} catch {
 		return new Set();
 	}
 }
 
-function saveShowArchivedSections(sections: Set<string>): void {
-	localStorage.setItem(SHOW_ARCHIVED_KEY, JSON.stringify([...sections]));
+function saveShowArchivedSections(app: App, sections: Set<string>): void {
+	app.saveLocalStorage(SHOW_ARCHIVED_STORAGE_KEY, JSON.stringify([...sections]));
 }
 
 function renderHeatmapItem(container: HTMLElement, item: import('./types').HeatmapItem, columnName: string, callbacks: RenderCallbacks, app: App): void {
@@ -1574,8 +249,8 @@ function renderHeatmapItem(container: HTMLElement, item: import('./types').Heatm
 	// Label row
 	const headerRow = el.createDiv({ cls: 'dashboard-heatmap-item-header' });
 	const titleArea = headerRow.createDiv({ cls: 'dashboard-heatmap-item-title' });
-	const label = titleArea.createSpan({ cls: 'dashboard-heatmap-item-label', text: item.label });
-	const keyHint = titleArea.createSpan({ cls: 'dashboard-heatmap-item-key', text: `(${item.key})` });
+	titleArea.createSpan({ cls: 'dashboard-heatmap-item-label', text: item.label });
+	titleArea.createSpan({ cls: 'dashboard-heatmap-item-key', text: `(${item.key})` });
 
 	const actions = headerRow.createDiv({ cls: 'dashboard-heatmap-item-actions' });
 
@@ -1637,10 +312,10 @@ function renderHeatmapItem(container: HTMLElement, item: import('./types').Heatm
 
 	const visibleWeeks = weeks;
 	const grid = heatmapEl.createDiv({ cls: 'dashboard-heatmap-item-grid-inner' });
-	grid.style.display = 'grid';
-	grid.style.gridTemplateColumns = `repeat(${visibleWeeks.length}, var(--dashboard-heatmap-cell-size))`;
-	grid.style.gridTemplateRows = 'repeat(7, var(--dashboard-heatmap-cell-size))';
-	grid.style.gap = '2px';
+	grid.setCssProps({ 'display': 'grid' });
+	grid.setCssProps({ 'grid-template-columns': `repeat(${visibleWeeks.length}, var(--dashboard-heatmap-cell-size))` });
+	grid.setCssProps({ 'grid-template-rows': 'repeat(7, var(--dashboard-heatmap-cell-size))' });
+	grid.setCssProps({ 'gap': '2px' });
 
 	for (const week of visibleWeeks) {
 		for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
@@ -1650,8 +325,8 @@ function renderHeatmapItem(container: HTMLElement, item: import('./types').Heatm
 				cell.addClass('dashboard-heatmap-item-cell--empty');
 			} else {
 				const intensity = (point.value - minVal) / range;
-				cell.style.backgroundColor = item.color || accentColor;
-				cell.style.opacity = String(0.38 + intensity * 0.62);
+				cell.setCssProps({ 'background-color': item.color || accentColor });
+				cell.setCssProps({ 'opacity': String(0.38 + intensity * 0.62) });
 				cell.title = `${point.date}: ${point.value}`;
 			}
 		}
@@ -1668,26 +343,27 @@ function renderHeatmapItem(container: HTMLElement, item: import('./types').Heatm
 	const completionRate = Math.round((validPoints.length / data.length) * 100);
 
 	const currentEl = statsRow.createSpan({ cls: 'dashboard-heatmap-item-stat' });
-	currentEl.createSpan({ cls: 'dashboard-heatmap-item-stat-icon', text: '📊' });
+	setIcon(currentEl.createSpan({ cls: 'dashboard-heatmap-item-stat-icon' }), 'chart-no-axes-column-increasing');
 	currentEl.createSpan({ text: `${t('heatmap.current')}: ${avgValue}` });
 
 	const streakEl = statsRow.createSpan({ cls: 'dashboard-heatmap-item-stat' });
-	streakEl.createSpan({ cls: 'dashboard-heatmap-item-stat-icon', text: '⚡' });
+	setIcon(streakEl.createSpan({ cls: 'dashboard-heatmap-item-stat-icon' }), 'flame');
 	streakEl.createSpan({ text: t('heatmap.streak', { count: streak }) });
 
 	const rateEl = statsRow.createSpan({ cls: 'dashboard-heatmap-item-stat' });
-	rateEl.createSpan({ cls: 'dashboard-heatmap-item-stat-icon', text: '✅' });
+	setIcon(rateEl.createSpan({ cls: 'dashboard-heatmap-item-stat-icon' }), 'circle-check');
 	rateEl.createSpan({ text: t('heatmap.rate', { rate: completionRate }) });
 }
 
-function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app: App, data?: DashboardData, settings?: DashboardSettings): HTMLElement {
+export function renderDashboardSection(originalColumn: DashboardColumn, callbacks: RenderCallbacks, app: App, data?: DashboardData, settings?: DashboardSettings): HTMLElement {
+	const column = { ...originalColumn, cards: originalColumn.cards.filter(card => card.type !== 'weather') };
 	const el = document.createElement('div');
 	el.addClass('dashboard-section-row');
 	el.dataset.column = column.name;
 	const sectionType = getSectionType(column);
 	el.dataset.sectionType = sectionType;
 
-	const collapsed = getCollapsedSections();
+	const collapsed = getCollapsedSections(app);
 	if (collapsed.has(column.name)) {
 		el.addClass('dashboard-section-row--collapsed');
 	}
@@ -1735,7 +411,7 @@ function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app:
 			finish(true);
 		});
 	});
-	titleEl.style.cursor = 'pointer';
+	titleEl.setCssProps({ 'cursor': 'pointer' });
 
 	toggle.addEventListener('click', (e) => {
 		e.stopPropagation();
@@ -1747,12 +423,15 @@ function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app:
 			el.addClass('dashboard-section-row--collapsed');
 			collapsed.add(column.name);
 		}
-		saveCollapsedSections(collapsed);
+		saveCollapsedSections(app, collapsed);
 	});
 
 		const headerActions = header.createDiv({ cls: 'dashboard-section-header-actions' });
 
 	if (sectionType === 'todo') {
+		const sourcesBtn = headerActions.createEl('button', { cls: 'dashboard-section-add-btn dashboard-source-configure', attr: { 'aria-label': t('source.configure') } });
+		setIcon(sourcesBtn, 'settings');
+		sourcesBtn.addEventListener('click', () => callbacks.onTodoSourcesConfigure(column.name));
 		const templateBtn = headerActions.createEl('button', {
 			cls: 'dashboard-section-add-btn',
 			attr: { 'aria-label': t('template.addFromTemplate') },
@@ -1762,7 +441,7 @@ function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app:
 
 		const archivedCount = column.cards.filter(card => card.archived).length;
 		if (archivedCount > 0) {
-			const showArchived = getShowArchivedSections();
+			const showArchived = getShowArchivedSections(app);
 			const isShowingArchived = showArchived.has(column.name);
 			const archiveToggleBtn = headerActions.createEl('button', {
 				cls: `dashboard-section-add-btn dashboard-section-archive-toggle${isShowingArchived ? ' dashboard-section-archive-toggle--active' : ''}`,
@@ -1778,7 +457,7 @@ function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app:
 				} else {
 					showArchived.add(column.name);
 				}
-				saveShowArchivedSections(showArchived);
+				saveShowArchivedSections(app, showArchived);
 				renderDashboard(el.parentElement as HTMLElement, data, callbacks, app, settings);
 			});
 		}
@@ -1810,6 +489,7 @@ function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app:
 			cls: 'dashboard-heatmap-section' + (isRowLayout ? ' dashboard-heatmap-section--row' : ' dashboard-heatmap-section--column'),
 		});
 		const items = column.heatmapItems ?? [];
+		if (items.length === 0) el.addClass('dashboard-section-row--empty');
 		for (const item of items) {
 			renderHeatmapItem(heatmapContainer, item, column.name, callbacks, app);
 		}
@@ -1841,8 +521,10 @@ function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app:
 	addCardBtn.addEventListener('click', () => callbacks.onCardAdd(column.name));
 
 	const cardsContainer = el.createDiv({ cls: 'dashboard-section-cards' });
+	if (sectionType === 'todo') callbacks.onTodoSourcesMount(cardsContainer, column);
 
-	for (const card of column.cards.filter(card => !card.archived)) {
+	const visibleCards = column.cards.filter(card => !card.archived);
+	for (const card of visibleCards) {
 		try {
 			const cardEl = renderCard(card, column.name, sectionType, callbacks, app, data, settings);
 			cardsContainer.appendChild(cardEl);
@@ -1851,9 +533,14 @@ function renderSection(column: DashboardColumn, callbacks: RenderCallbacks, app:
 		}
 	}
 
-	const showArchived = sectionType === 'todo' && getShowArchivedSections().has(column.name);
+	const showArchived = sectionType === 'todo' && getShowArchivedSections(app).has(column.name);
 	if (showArchived) {
 		renderArchivedTodoList(el, column, callbacks);
+	}
+	const hasTodoSources = sectionType === 'todo'
+		&& Boolean(column.todoSources?.monthly.enabled || column.todoSources?.daily.enabled);
+	if (visibleCards.length === 0 && !hasTodoSources && !showArchived) {
+		el.addClass('dashboard-section-row--empty');
 	}
 
 	return el;
@@ -1920,12 +607,11 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 
 	const isMemo = sectionType === 'memo';
 	const isTask = card.type === 'task' || sectionType === 'todo';
-	const isWeather = card.type === 'weather';
 	const isTracker = card.type === 'tracker';
-	const isWidget = isWeather || isTracker;
+	const isWidget = isTracker;
 	const isProjectLike = !isMemo && !isTask && !isWidget;
 	const isDashboardSection = sectionType === 'dashboard';
-	const showCover = isProjectLike && !isDashboardSection && sectionType !== 'notes';
+	const showCover = isProjectLike && !isDashboardSection && Boolean(card.coverImage.trim());
 
 	if (showCover) {
 		el.addClass('dashboard-card--cover');
@@ -1935,12 +621,10 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 		const resolved = resolveVaultImage(app, card.coverImage);
 		if (resolved) {
 			const cover = el.createDiv({ cls: 'dashboard-project-cover' });
-			cover.style.backgroundImage = `url("${resolved}")`;
+			cover.setCssProps({ 'background-image': `url("${resolved}")` });
 		} else {
 			el.createDiv({ cls: 'dashboard-project-cover dashboard-project-cover--default' });
 		}
-	} else if (showCover) {
-		el.createDiv({ cls: 'dashboard-project-cover dashboard-project-cover--default' });
 	}
 
 	const header = el.createDiv({ cls: 'dashboard-card-header' });
@@ -1995,7 +679,7 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 			finish(true);
 		});
 	});
-	titleEl.style.cursor = 'pointer';
+	titleEl.setCssProps({ 'cursor': 'pointer' });
 
 	const actions = header.createDiv({ cls: 'dashboard-card-actions' });
 
@@ -2008,8 +692,8 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 			L: { cols: 2, rows: 2 },
 		};
 		const grid = sizeToGrid[currentSize];
-		el.style.gridColumn = `span ${grid.cols}`;
-		el.style.gridRow = `span ${grid.rows}`;
+		el.setCssProps({ 'grid-column': `span ${grid.cols}` });
+		el.setCssProps({ 'grid-row': `span ${grid.rows}` });
 
 		// Size selector button for dashboard widgets only
 		const sizeBtn = actions.createEl('button', {
@@ -2033,17 +717,17 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 		});
 		setIcon(colorBtn, 'palette');
 		if (card.color) {
-			colorBtn.style.color = card.color;
+			colorBtn.setCssProps({ 'color': card.color });
 		}
 		colorBtn.addEventListener('click', (e) => {
 			e.stopPropagation();
 			const input = document.createElement('input');
 			input.type = 'color';
 			input.value = card.color || '#f59e0b';
-			input.style.position = 'absolute';
-			input.style.opacity = '0';
-			input.style.width = '0';
-			input.style.height = '0';
+			input.setCssProps({ 'position': 'absolute' });
+			input.setCssProps({ 'opacity': '0' });
+			input.setCssProps({ 'width': '0' });
+			input.setCssProps({ 'height': '0' });
 			document.body.appendChild(input);
 			input.addEventListener('input', () => {
 				callbacks.onMemoColorChange(card, input.value);
@@ -2148,9 +832,9 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 	if (isMemo) {
 		if (card.width > 0) {
 			const w = Math.max(200, Math.min(600, card.width));
-			el.style.flex = `0 0 ${w}px`;
-			el.style.minWidth = `${w}px`;
-			el.style.maxWidth = `${w}px`;
+			el.setCssProps({ 'flex': `0 0 ${w}px` });
+			el.setCssProps({ 'min-width': `${w}px` });
+			el.setCssProps({ 'max-width': `${w}px` });
 		}
 	}
 
@@ -2162,9 +846,9 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 		const maxW = 600;
 		if (!isMemo && card.width > 0) {
 			const w = Math.max(minW, Math.min(500, card.width));
-			el.style.flex = `0 0 ${w}px`;
-			el.style.minWidth = `${w}px`;
-			el.style.maxWidth = `${w}px`;
+			el.setCssProps({ 'flex': `0 0 ${w}px` });
+			el.setCssProps({ 'min-width': `${w}px` });
+			el.setCssProps({ 'max-width': `${w}px` });
 		}
 		const handle = el.createDiv({ cls: 'dashboard-card-resize-handle' });
 		handle.addEventListener('mousedown', (e) => {
@@ -2177,9 +861,9 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 			const onMove = (ev: MouseEvent) => {
 				const delta = ev.clientX - startX;
 				const newWidth = Math.max(minW, Math.min(maxW, startWidth + delta));
-				el.style.flex = `0 0 ${newWidth}px`;
-				el.style.minWidth = `${newWidth}px`;
-				el.style.maxWidth = `${newWidth}px`;
+				el.setCssProps({ 'flex': `0 0 ${newWidth}px` });
+				el.setCssProps({ 'min-width': `${newWidth}px` });
+				el.setCssProps({ 'max-width': `${newWidth}px` });
 			};
 
 			const onUp = (ev: MouseEvent) => {
@@ -2202,7 +886,7 @@ function renderCard(card: DashboardCard, columnName: string, sectionType: string
 
 function renderCardBody(container: HTMLElement, card: DashboardCard, columnName: string, sectionType: string, callbacks: RenderCallbacks, app: App, data?: DashboardData, settings?: DashboardSettings): void {
 	if (card.type === 'weather') {
-		renderWeatherBody(container, card, app);
+
 		return;
 	}
 
@@ -2300,8 +984,8 @@ function renderTaskBody(container: HTMLElement, card: DashboardCard, callbacks: 
 
 			// Auto-size: fit content and expand as user types
 			const autoResize = () => {
-				textarea.style.height = 'auto';
-				textarea.style.height = textarea.scrollHeight + 'px';
+				textarea.setCssProps({ 'height': 'auto' });
+				textarea.setCssProps({ 'height': textarea.scrollHeight + 'px' });
 			};
 			autoResize();
 
@@ -2440,8 +1124,8 @@ function renderMemoBody(container: HTMLElement, card: DashboardCard, callbacks: 
 	const view = container.createDiv({ cls: 'dashboard-memo-view' });
 	renderMemoViewContent(view, text, app);
 	view.addEventListener('click', () => {
-		view.style.display = 'none';
-		textarea.style.display = '';
+		view.setCssProps({ 'display': 'none' });
+		textarea.setCssProps({ 'display': '' });
 		textarea.focus();
 	});
 
@@ -2451,7 +1135,7 @@ function renderMemoBody(container: HTMLElement, card: DashboardCard, callbacks: 
 		text: text,
 		attr: { placeholder: t('renderer.writeThoughts') },
 	});
-	textarea.style.display = 'none';
+	textarea.setCssProps({ 'display': 'none' });
 
 	attachFileSuggest(textarea, app);
 
@@ -2486,8 +1170,8 @@ function renderMemoBody(container: HTMLElement, card: DashboardCard, callbacks: 
 		// If re-render didn't happen (not dirty), switch to view manually
 		if (document.body.contains(view)) {
 			renderMemoViewContent(view, textarea.value, app);
-			view.style.display = '';
-			textarea.style.display = 'none';
+			view.setCssProps({ 'display': '' });
+			textarea.setCssProps({ 'display': 'none' });
 		}
 	});
 }
@@ -2514,28 +1198,7 @@ function renderMemoViewContent(container: HTMLElement, text: string, app: App): 
 	}
 }
 
-function renderNoteBody(container: HTMLElement, card: DashboardCard): void {
-	if (card.blockquote) {
-		const quote = container.createDiv({ cls: 'dashboard-note-quote' });
-		quote.setText(card.blockquote);
-	}
-	if (card.body) {
-		container.createDiv({ cls: 'dashboard-note-body', text: card.body });
-	}
-}
-
-function renderLinkBody(container: HTMLElement, card: DashboardCard): void {
-	const link = container.createEl('a', {
-		cls: 'dashboard-link-url',
-		attr: { href: card.url, target: '_blank', rel: 'noopener' },
-		text: card.url,
-	});
-	if (card.body) {
-		container.createDiv({ cls: 'dashboard-link-desc', text: card.body });
-	}
-}
-
-	function renderProjectBody(container: HTMLElement, card: DashboardCard, callbacks: RenderCallbacks, app: App): void {
+function renderProjectBody(container: HTMLElement, card: DashboardCard, callbacks: RenderCallbacks, app: App): void {
 		const parseDocPaths = (body: string): string[] =>
 			body.split('\n')
 				.map(line => line.trim())
@@ -2585,7 +1248,7 @@ function renderLinkBody(container: HTMLElement, card: DashboardCard): void {
 					attr: { 'aria-label': t('renderer.removeDoc') },
 				});
 				setIcon(removeBtn, 'x');
-				removeBtn.addEventListener('click', async (e) => {
+				removeBtn.addEventListener('click', handleAsync(async (e: MouseEvent) => {
 					e.stopPropagation();
 					const currentPaths = parseDocPaths(card.body);
 					const newPaths = currentPaths.filter((_, i) => i !== idx);
@@ -2595,18 +1258,18 @@ function renderLinkBody(container: HTMLElement, card: DashboardCard): void {
 					});
 					if (!confirmed) return;
 					callbacks.onProjectDocsUpdate(card, newPaths);
-				});
+				}));
 
 				docItem.addEventListener('click', (e) => {
 					if ((e.target as HTMLElement).tagName === 'BUTTON') return;
 					const f = app.vault.getFileByPath(docPath);
 					if (f) {
-						app.workspace.getLeaf(false).openFile(f);
+						void app.workspace.getLeaf(false).openFile(f);
 					} else {
 						const basename = docPath.split('/').pop()?.replace(/\.md$/, '') ?? '';
 						if (basename) {
 							const found = getSearchableFiles(app).find(mf => mf.basename === basename);
-							if (found) app.workspace.getLeaf(false).openFile(found);
+							if (found) void app.workspace.getLeaf(false).openFile(found);
 						}
 					}
 				});
@@ -2699,23 +1362,13 @@ function renderLinkBody(container: HTMLElement, card: DashboardCard): void {
 		});
 	}
 
-function renderHabitBody(container: HTMLElement, card: DashboardCard): void {
-	const streakEl = container.createDiv({ cls: 'dashboard-habit-streak' });
-	streakEl.createSpan({ cls: 'dashboard-habit-icon', text: '🔥' });
-	streakEl.createSpan({ text: t('renderer.dayStreak', { count: card.streak }) });
-
-	if (card.body) {
-		container.createDiv({ cls: 'dashboard-habit-body', text: card.body });
-	}
-}
-
 function getSectionType(column: DashboardColumn): string {
-	if (column.sectionType) return column.sectionType;
+	if (column.sectionType) return column.sectionType === 'notes' ? 'projects' : column.sectionType;
 	const lower = column.name.toLowerCase();
 	if (lower === 'memo') return 'memo';
 	if (lower === 'todo') return 'todo';
 	if (lower === 'projects') return 'projects';
-	if (lower === 'notes') return 'notes';
+	if (lower === 'notes') return 'projects';
 	if (lower === 'dashboard') return 'dashboard';
 	if (lower === 'library') return 'library';
 	if (lower === 'heatmap') return 'heatmap';
@@ -2795,7 +1448,7 @@ function renderWikilink(container: HTMLElement, content: string, app: App): void
 			}
 		}
 		if (file) {
-			app.workspace.getLeaf(false).openFile(file, {
+			void app.workspace.getLeaf(false).openFile(file, {
 				eState: fragment ? { line: 0 } : undefined,
 			});
 		}
@@ -2873,14 +1526,14 @@ function showReminderPopup(
 	inheritDashboardThemeVars(popup, anchorBtn);
 
 	const rect = anchorBtn.getBoundingClientRect();
-	popup.style.position = 'fixed';
-	popup.style.top = `${rect.bottom + 4}px`;
+	popup.setCssProps({ 'position': 'fixed' });
+	popup.setCssProps({ 'top': `${rect.bottom + 4}px` });
 
 	const popupWidth = 240;
 	if (rect.left + popupWidth > window.innerWidth) {
-		popup.style.right = `${window.innerWidth - rect.right}px`;
+		popup.setCssProps({ 'right': `${window.innerWidth - rect.right}px` });
 	} else {
-		popup.style.left = `${rect.left}px`;
+		popup.setCssProps({ 'left': `${rect.left}px` });
 	}
 
 	// Scroll & resize tracking — reposition popup when content moves
@@ -2891,18 +1544,18 @@ function showReminderPopup(
 			closeAllReminderPopups();
 			return;
 		}
-		popup.style.top = `${r.bottom + 4}px`;
+		popup.setCssProps({ 'top': `${r.bottom + 4}px` });
 		if (r.left + popupWidth > window.innerWidth) {
-			popup.style.right = `${window.innerWidth - r.right}px`;
-			popup.style.left = 'auto';
+			popup.setCssProps({ 'right': `${window.innerWidth - r.right}px` });
+			popup.setCssProps({ 'left': 'auto' });
 		} else {
-			popup.style.left = `${r.left}px`;
-			popup.style.right = 'auto';
+			popup.setCssProps({ 'left': `${r.left}px` });
+			popup.setCssProps({ 'right': 'auto' });
 		}
 	};
 	document.addEventListener('scroll', updatePopupPosition, { passive: true, capture: true });
 	window.addEventListener('resize', updatePopupPosition);
-	(popup as any).__reminderCleanup = () => {
+	(popup as HTMLElement & { __reminderCleanup?: () => void }).__reminderCleanup = () => {
 		document.removeEventListener('scroll', updatePopupPosition, { capture: true });
 		window.removeEventListener('resize', updatePopupPosition);
 	};
@@ -3044,7 +1697,11 @@ function showReminderPopup(
 			document.removeEventListener('mousedown', outsideClick);
 		}
 	};
-	setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
+	const outsideTimer = setTimeout(() => document.addEventListener('mousedown', outsideClick), 0);
+	const positioningCleanup = (popup as HTMLElement & { __reminderCleanup?: () => void }).__reminderCleanup;
+	(popup as HTMLElement & { __reminderCleanup?: () => void }).__reminderCleanup = () => {
+		clearTimeout(outsideTimer); document.removeEventListener('mousedown', outsideClick); positioningCleanup?.();
+	};
 
 	renderCalendar();
 }
@@ -3057,52 +1714,6 @@ function closeAllReminderPopups(): void {
 	});
 }
 
-
-function renderWeatherBody(container: HTMLElement, card: DashboardCard, app: App): void {
-	if (!card.weatherConfig) return;
-
-	const el = container.createDiv({ cls: 'dashboard-weather' });
-
-	const cached = getCachedWeather(card.weatherConfig);
-	if (cached) {
-		renderWeatherContent(el, cached, card.weatherConfig.cityName);
-	} else {
-		el.createDiv({ cls: 'dashboard-weather-loading', text: '...' });
-		fetchWeather(card.weatherConfig).then(data => {
-			el.empty();
-			renderWeatherContent(el, data, card.weatherConfig!.cityName);
-		}).catch(() => {
-			el.empty();
-			el.createDiv({ cls: 'dashboard-weather-error', text: t('weather.fetchError') });
-		});
-	}
-}
-
-function renderWeatherContent(el: HTMLElement, data: import('./types').WeatherData, cityName: string): void {
-	const current = el.createDiv({ cls: 'dashboard-weather-current' });
-	const tempWrap = current.createDiv({ cls: 'dashboard-weather-temp-wrap' });
-	tempWrap.createDiv({ cls: 'dashboard-weather-temp', text: `${Math.round(data.temperature)}\u00B0` });
-	tempWrap.createDiv({ cls: 'dashboard-weather-icon', text: getWeatherEmoji(data.weatherCode) });
-
-	const details = current.createDiv({ cls: 'dashboard-weather-details' });
-	details.createDiv({ cls: 'dashboard-weather-city', text: cityName });
-	details.createDiv({ cls: 'dashboard-weather-desc', text: getWeatherDescription(data.weatherCode) });
-	const metaLine = details.createDiv({ cls: 'dashboard-weather-wind' });
-	metaLine.createSpan({ text: `${t('weather.feelsLike')} ${Math.round(data.feelsLike)}\u00B0  ${t('weather.humidity')} ${Math.round(data.humidity)}%  ${t('weather.wind')} ${Math.round(data.windSpeed)} km/h` });
-
-	if (data.dailyDates.length > 0) {
-		const forecast = el.createDiv({ cls: 'dashboard-weather-forecast' });
-		const count = Math.min(data.dailyDates.length, 5);
-		for (let i = 0; i < count; i++) {
-			const day = forecast.createDiv({ cls: 'dashboard-weather-day' });
-			const d = new Date(data.dailyDates[i]! + 'T00:00:00');
-			const dayName = d.toLocaleDateString(getLanguage() === 'zh' ? 'zh-CN' : 'en', { weekday: 'short' });
-			day.createDiv({ cls: 'dashboard-weather-day-name', text: dayName });
-			day.createDiv({ cls: 'dashboard-weather-day-icon', text: getWeatherEmoji(data.dailyCodes[i]!) });
-			day.createDiv({ cls: 'dashboard-weather-day-temps', text: `${Math.round(data.dailyMax[i]!)}\u00B0 / ${Math.round(data.dailyMin[i]!)}\u00B0` });
-		}
-	}
-}
 
 function renderTrackerBody(container: HTMLElement, card: DashboardCard, app: App, settings?: import('./types').DashboardSettings): void {
 	if (!card.trackerConfig) return;
@@ -3296,10 +1907,10 @@ function renderTrackerHeatmap(el: HTMLElement, data: import('./types').TrackerDa
 	const visibleWeeks = weeks.slice(-maxWeeks);
 
 	const grid = heatmap.createDiv({ cls: 'dashboard-tracker-heatmap-grid' });
-	grid.style.display = 'grid';
-	grid.style.gridTemplateColumns = `repeat(${visibleWeeks.length}, ${cellSize}px)`;
-	grid.style.gridTemplateRows = `repeat(7, ${cellSize}px)`;
-	grid.style.gap = `${gap}px`;
+	grid.setCssProps({ 'display': 'grid' });
+	grid.setCssProps({ 'grid-template-columns': `repeat(${visibleWeeks.length}, ${cellSize}px)` });
+	grid.setCssProps({ 'grid-template-rows': `repeat(7, ${cellSize}px)` });
+	grid.setCssProps({ 'gap': `${gap}px` });
 
 	// Day labels (Mon, Tue, ... Sun) for L size
 	if (size === 'L') {
@@ -3314,17 +1925,17 @@ function renderTrackerHeatmap(el: HTMLElement, data: import('./types').TrackerDa
 		for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
 			const point = week[dayIdx] ?? null;
 			const cell = grid.createDiv({ cls: 'dashboard-tracker-heatmap-cell' });
-			cell.style.width = `${cellSize}px`;
-			cell.style.height = `${cellSize}px`;
-			cell.style.borderRadius = `${Math.max(2, cellSize / 4)}px`;
+			cell.setCssProps({ 'width': `${cellSize}px` });
+			cell.setCssProps({ 'height': `${cellSize}px` });
+			cell.setCssProps({ 'border-radius': `${Math.max(2, cellSize / 4)}px` });
 
 			if (point === null || point.value === null) {
 				cell.addClass('dashboard-tracker-heatmap-cell--empty');
 			} else {
 				const intensity = (point.value - minVal) / range;
 				const alpha = 0.15 + intensity * 0.85;
-				cell.style.backgroundColor = accentColor;
-				cell.style.opacity = String(alpha);
+				cell.setCssProps({ 'background-color': accentColor });
+				cell.setCssProps({ 'opacity': String(alpha) });
 				cell.title = `${point.date}: ${point.value}`;
 			}
 		}

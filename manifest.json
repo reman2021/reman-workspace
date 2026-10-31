@@ -1,9 +1,9 @@
 {
-	"id": "apex-dashboard",
-	"name": "Apex Dashboard",
-	"version": "1.0.0",
-	"minAppVersion": "1.0.0",
-	"description": "Your personal command center for Obsidian — memos, todos, projects, and quick links in one stunning glassmorphism dashboard.",
-	"author": "Reman",
-	"isDesktopOnly": false
+  "id": "reman-workspace",
+  "name": "Reman Workspace",
+  "version": "1.1.5",
+  "minAppVersion": "1.8.7",
+  "description": "A focused Obsidian workspace for memos, todos, notes, file search, and optional tracking.",
+  "author": "Reman",
+  "isDesktopOnly": false
 }

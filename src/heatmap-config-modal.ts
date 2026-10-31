@@ -2,11 +2,11 @@ import { App, Modal } from 'obsidian';
 import type { HeatmapItem } from './types';
 import { suggestTrackerKeys } from './tracker-service';
 import { t } from './i18n';
-import { inheritDashboardThemeVars } from './theme-utils';
+import { initializeDashboardModal } from './theme-utils';
+import { createModalInputField } from './modal-form';
 
 export class HeatmapConfigModal extends Modal {
 	private onSave: (item: HeatmapItem) => void;
-	private theme: string;
 	private existing: HeatmapItem | null;
 
 	private keyValue = '';
@@ -17,12 +17,10 @@ export class HeatmapConfigModal extends Modal {
 		app: App,
 		onSave: (item: HeatmapItem) => void,
 		existing?: HeatmapItem,
-		theme?: string,
 	) {
 		super(app);
 		this.onSave = onSave;
 		this.existing = existing ?? null;
-		this.theme = theme ?? 'default';
 		if (existing) {
 			this.keyValue = existing.key;
 			this.labelValue = existing.label;
@@ -31,34 +29,32 @@ export class HeatmapConfigModal extends Modal {
 	}
 
 	onOpen(): void {
-		const { contentEl, containerEl } = this;
-		containerEl.dataset.theme = this.theme;
+		const { contentEl } = this;
 		contentEl.addClass('dashboard-modal');
-		inheritDashboardThemeVars(contentEl);
+		initializeDashboardModal(this);
 		contentEl.createEl('h2', { text: t('heatmap.configTitle') });
 
 		const form = contentEl.createDiv({ cls: 'dashboard-modal-form' });
 
 		// Label input
-		const labelField = form.createDiv({ cls: 'chart-config-field' });
-		labelField.createEl('label', { text: t('heatmap.labelLabel') });
-		const labelInput = labelField.createEl('input', {
-			cls: 'dashboard-modal-input',
-			attr: { type: 'text', placeholder: t('heatmap.labelPlaceholder') },
+		const labelInput = createModalInputField(form, {
+			label: t('heatmap.labelLabel'),
+			placeholder: t('heatmap.labelPlaceholder'),
+			value: this.labelValue,
+			fieldClass: 'chart-config-field',
 		});
-		labelInput.value = this.labelValue;
 		labelInput.addEventListener('input', () => {
 			this.labelValue = labelInput.value.trim();
 		});
 
 		// Frontmatter key input
-		const keyField = form.createDiv({ cls: 'chart-config-field' });
-		keyField.createEl('label', { text: t('heatmap.keyLabel') });
-		const keyInput = keyField.createEl('input', {
-			cls: 'dashboard-modal-input',
-			attr: { type: 'text', placeholder: t('heatmap.keyPlaceholder') },
+		const keyInput = createModalInputField(form, {
+			label: t('heatmap.keyLabel'),
+			placeholder: t('heatmap.keyPlaceholder'),
+			value: this.keyValue,
+			fieldClass: 'chart-config-field',
 		});
-		keyInput.value = this.keyValue;
+		const keyField = keyInput.parentElement!;
 		keyInput.addEventListener('input', () => {
 			this.keyValue = keyInput.value.trim();
 		});
@@ -88,10 +84,10 @@ export class HeatmapConfigModal extends Modal {
 		const daysRow = daysField.createDiv({ cls: 'chart-config-type-row' });
 
 		const dayOptions = [
-			{ value: 30, label: '30 ' + t('countdown.days') },
-			{ value: 90, label: '90 ' + t('countdown.days') },
-			{ value: 180, label: '180 ' + t('countdown.days') },
-			{ value: 365, label: '365 ' + t('countdown.days') },
+			{ value: 30, label: '30 ' + t('tracker.days') },
+			{ value: 90, label: '90 ' + t('tracker.days') },
+			{ value: 180, label: '180 ' + t('tracker.days') },
+			{ value: 365, label: '365 ' + t('tracker.days') },
 		];
 
 		for (const opt of dayOptions) {
