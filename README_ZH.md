@@ -1,56 +1,45 @@
-# Reman Workspace · 精简工作台
+# Reman Workspace
 
-**Reman Workspace** 是基于 [PandoraReads/apex-dashboard](https://github.com/PandoraReads/apex-dashboard) 维护的个人 Obsidian 工作台，版本 **1.1.5**。保留轻量工作入口和已有定制，不整体合并上游 3.x。插件 ID 与包名均为 `reman-workspace`；现有本地目录和 GitHub 仓库名无需随产品名称调整。
+语言：[English](README.md) | 简体中文
 
-## 保留功能
+**Reman Workspace** 是基于 [PandoraReads/apex-dashboard](https://github.com/PandoraReads/apex-dashboard) 定制的个人 Obsidian 工作台。它以一个主页集中承载备忘录、待办、笔记、文件入口、轻量数据库和可选数据追踪，不引入通用工作流引擎。
 
-- **本月／当日计划来源卡**：在 Todo 标题栏点配置按钮，分别启用来源卡。支持日期路径模板、章节范围、双链及相对链接、勾选回写与外部编辑刷新；日记缺失时提供模板创建入口。任务仍保存在原笔记，不复制进主页。
-- **Memo 与 Todo**：双链、就地编辑、任务拖拽排序、完成进度、任务提醒、任务模板、Todo 归档与恢复。
-- **快捷操作与文件搜索**：打开 Vault 文件、执行 Obsidian 命令；按文件名或相对路径搜索，支持中文、Bases、Canvas、PDF 和媒体文件。结果最多 20 项，显示完整路径；方向键选择、Enter 打开、Esc 收起。移动端通过横幅上的快捷操作按钮进入。
-- **笔记卡片**：统一管理封面、多个文档链接和文档拖拽；封面路径非空时显示图片，空路径不显示封面，路径无法解析时显示占位图。
-- **数据库**：按笔记显式 frontmatter 属性及属性值筛选，支持网格、列表、表格和看板。已有 Bases 可继续作为独立文件打开，无需重复建库。
-- **热力图与追踪器**：保留现有数值属性读取、统计和 Chart.js 图表，可手动添加，不默认铺满主页。
-- **横幅与默认外观**：只保留一套默认自适应外观，不提供主题选择器；外观跟随 Obsidian 当前明暗模式与主题色，采用无边框分区、实色卡片、轻量阴影、清晰卡片边界和按层级使用的 2／3／4 px 小圆角。保留名言颜色、名言库、背景图片列表与轮播，以及侧栏、横幅和分区折叠。
-- **周历条**：侧栏展示周一至周日的日期，并高亮今天。
-- **最近文档与备份**：保留最近编辑列表、可选启动打开、自定义工作台名称，以及 `.obsidian/plugins/reman-workspace/backups/` 内最多 5 份主页备份。
+插件 ID、GitHub 仓库名与建议本地检出目录均统一为 `reman-workspace`。
 
-添加操作按钮常驻显示并位于固定按钮左侧；插件弹窗统一使用原生单层外框，多行编辑框固定宽度、只允许调整高度。
+## 核心功能
 
-## 本次精简
+- Memo 与 Todo 卡片：支持就地编辑、任务排序、提醒、模板、归档与恢复。
+- 可选的本月／当日来源卡：从现有 Vault 笔记读取任务，并将勾选状态直接写回来源笔记。
+- 快捷操作、最近文档与文件搜索：覆盖 Markdown、Bases、Canvas、PDF 和支持的媒体文件。
+- 统一笔记卡片：支持可选封面、多个关联文档及顺序调整。
+- 基于 frontmatter 的数据库视图、数值追踪器与热力图。
+- 自适应明暗外观、可编辑名言横幅、分区折叠及桌面／移动端响应式布局。
+- 兼容读取旧工作区视图、设置、本地状态及 `notes` 分区。
 
-移除天气、农历黄历、抽签、番茄钟、阅读计时和倒数日，包括入口、设置、定时器与专用依赖。不引入 RSS、AI 调度、创作工作流、记账、音乐或新的查询引擎。
+## 快速安装
 
-旧设置中的这些功能字段不再被使用。旧主页内的天气卡片不会显示，但其原始 Markdown 内容会保留，保存其他卡片时不会丢失；历史数据文件不会被删除。任务提醒和数据库筛选仍可使用日期选择器。
-
-新主页只创建空的 Memo、Todo 分区。原有主页布局和卡片继续读取。此次修改不修改任何 Vault 笔记、模板、Bases 或已安装插件。
-
-## 迁移兼容
-
-现有 `apex-dashboard-view` 工作区布局及 `apex-dashboard-*` 状态键仍可兼容读取；新插件尚无当前设置时会导入旧插件设置，之后的设置、工作区视图和状态只写入新的 `reman-workspace` 标识。新建分区只提供统一的“笔记”类型，旧主页中的 `type: notes` 会自动按同一笔记类型读取，无需手工修改主页文件。
-
-旧设置中的 `stylePreset` 值仍可读取，但运行时统一回退到唯一的默认外观，无需用户手工迁移设置。
-
-新备份写入 `.obsidian/plugins/reman-workspace/backups/`。旧 `.obsidian/plugins/apex-dashboard/backups/` 不会自动移动；如需保留历史备份，请保留旧目录或手工复制到新目录。
-
-## 构建与安装
-
-开发环境：Node.js **22 或更新版本**；插件运行环境：Obsidian **1.8.7 或更新版本**。
+按 `package.json` 与 `manifest.json` 声明的环境版本安装依赖并构建发布产物：
 
 ```sh
 npm ci
 npm run build
-npm run lint
-npm test
 ```
 
-构建完成后，将仓库根目录的 **main.js、styles.css、manifest.json** 三个文件复制到所选 Vault 的 `.obsidian/plugins/reman-workspace/`，然后在 Obsidian 中重新加载并启用 **Reman Workspace**。保留现有 `data.json` 和历史记录文件；旧备份按上面的迁移说明处理。
+将 `main.js`、`styles.css`、`manifest.json` 复制到：
 
-设置中的 Dashboard 文件填 Vault 相对路径，不带 `.md`，例如 `Home`。已有主页无需替换为默认模板。本仓库不会自动安装或写入 `E:\my-obsidian-vault`。
+```text
+<Vault>/.obsidian/plugins/reman-workspace/
+```
 
-## 验证
+重新加载 Obsidian 并启用 **Reman Workspace**，再将 **Dashboard file** 设为已有主页的 Vault 相对路径且不带 `.md`，例如 `Home`。升级时保留现有 `data.json`、主页 Markdown 和历史备份。
 
-- `npm test`：数据解析与保存、兼容旧天气块、归档、搜索、键盘与鼠标、数据库、横幅、追踪器和打开/关闭清理。
-- `npm run test:browser`：使用已安装 Chrome/Edge 运行真实浏览器测试，覆盖桌面/窄屏、Todo 编辑/勾选/拖拽和图表；可用 `CHROME_PATH` 指定浏览器路径。截图输出到忽略提交的 `.test-output/`。
-- 测试使用合成 Vault 与 Obsidian API 模拟层，不读取私人笔记，也不启动或修改真实 Obsidian Vault。真实客户端的最终验收步骤见[使用说明](使用说明_ZH.md)。
+## 文档
 
-本分支遵循 MIT 许可证，保留原作者版权信息。
+- [使用说明](使用说明_ZH.md)
+- [文档导航](docs/README.md)
+- [架构说明](docs/架构说明.md)
+- [开发指南](docs/开发指南.md)
+- [迁移与兼容](docs/迁移与兼容.md)
+- [主页示例](examples/dashboard-template.md)
+
+项目采用 MIT 许可证，并保留原上游署名。
