@@ -1,0 +1,20 @@
+export * from './obsidian-stub.js';
+export * from '../../src/data/markdown/index.ts';
+export * from '../../src/ui/file-search.ts';
+export * from '../../src/data/sync/sync-engine.ts';
+export * from '../../src/app/dashboard-renderer.ts';
+export * from '../../src/core/types.ts';
+export * from '../../src/app/dashboard-view.ts';
+export * from '../../src/features/banner/index.ts';
+export * from '../../src/features/library/config-modal.ts';
+export * from '../../src/features/tracking/service.ts';
+export * from '../../src/ui/confirm-dialog.ts';
+export * from '../../src/core/i18n/index.ts';
+export * from '../../src/core/identity.ts';
+export { default as DashboardPlugin } from '../../src/main.ts';
+export { Chart } from 'chart.js';
+
+export * from '../../src/features/todo-source/model.ts';
+export * from '../../src/features/todo-source/controller.ts';
+export * from '../../src/features/todo-source/config-modal.ts';
+export * from '../../src/features/quick-actions/index.ts';

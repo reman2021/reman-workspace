@@ -1,13 +1,13 @@
 import { Plugin } from 'obsidian';
-import { DEFAULT_SETTINGS, type DashboardSettings } from './types';
-import { DashboardSettingTab } from './settings';
-import { DashboardView } from './view';
-import { setLanguage, t } from './i18n';
+import { DEFAULT_SETTINGS, type DashboardSettings } from './core/types';
+import { DashboardSettingTab } from './app/settings';
+import { DashboardView } from './app/dashboard-view';
+import { setLanguage, t } from './core/i18n';
 import {
 	DASHBOARD_VIEW_TYPE,
 	LEGACY_DASHBOARD_VIEW_TYPE,
 	LEGACY_PLUGIN_ID,
-} from './identity';
+} from './core/identity';
 
 export default class DashboardPlugin extends Plugin {
 	settings!: DashboardSettings;

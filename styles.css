@@ -1,3 +1,8 @@
+/*
+ * GENERATED FILE — edit src/styles/*.css and run npm run build:styles.
+ * The ordered source list lives in scripts/styles.mjs.
+ */
+
 .workspace-leaf-content:is([data-type="reman-workspace-view"], [data-type="apex-dashboard-view"]) .view-content {
 	padding: 0 !important;
 }
@@ -85,6 +90,7 @@
 }
 
 .reman-workspace-root .dashboard-section-row,
+
 .reman-workspace-root .dashboard-section {
 	background: transparent;
 	border: none;

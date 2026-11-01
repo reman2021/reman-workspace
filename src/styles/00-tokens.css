@@ -1,0 +1,87 @@
+.workspace-leaf-content:is([data-type="reman-workspace-view"], [data-type="apex-dashboard-view"]) .view-content {
+	padding: 0 !important;
+}
+
+/* 共享基础层：页面与挂载到 body 的门户弹窗使用同一套几何和动效语义。 */
+:where(.reman-workspace-root, .modal.modal--dashboard) {
+	/* 几何层级：控件 < 卡片 < 面板；圆形控件为明确例外。 */
+	--db-radius-control: 2px;
+	--db-radius-card: 3px;
+	--db-radius-panel: 4px;
+	--db-radius-round: 999px;
+	/* 兼容旧的内部变量名，新增样式应使用上方语义变量。 */
+	--db-radius-sm: var(--db-radius-control);
+	--db-radius-md: var(--db-radius-card);
+	--db-radius-lg: var(--db-radius-panel);
+	/* 动效层级：控件反馈使用 fast，容器与布局变化使用 standard。 */
+	--db-motion-fast: 150ms cubic-bezier(0.2, 0, 0, 1);
+	--db-motion-standard: 200ms cubic-bezier(0.2, 0, 0, 1);
+	--db-focus-ring: 0 0 0 2px color-mix(in srgb, var(--db-accent, var(--interactive-accent)) 22%, transparent);
+}
+
+.reman-workspace-root {
+	--db-bg: var(--background-primary);
+	--db-bg-section: transparent;
+	--db-bg-card: color-mix(in srgb, var(--background-primary) 84%, var(--background-secondary) 16%);
+	--db-bg-card-hover: color-mix(in srgb, var(--background-primary) 76%, var(--interactive-accent) 7%, var(--background-secondary) 17%);
+	--db-bg-sidebar: color-mix(in srgb, var(--background-secondary) 92%, var(--interactive-accent) 8%);
+	--db-bg-input: color-mix(in srgb, var(--background-primary) 88%, var(--interactive-accent) 12%);
+	--db-bg-btn: color-mix(in srgb, var(--background-secondary) 86%, var(--interactive-accent) 14%);
+	--db-bg-btn-hover: color-mix(in srgb, var(--background-secondary) 74%, var(--interactive-accent) 26%);
+	--db-bg-banner: color-mix(in srgb, var(--background-secondary) 84%, var(--interactive-accent) 16%);
+	--db-bg-overlay: linear-gradient(135deg, rgba(0,0,0,0.48) 0%, rgba(0,0,0,0.18) 100%);
+	--db-bg-hover: color-mix(in srgb, var(--background-modifier-hover) 82%, var(--interactive-accent) 18%);
+	--db-bg-hover-strong: color-mix(in srgb, var(--background-modifier-hover) 64%, var(--interactive-accent) 36%);
+	--db-bg-add-section: color-mix(in srgb, var(--background-secondary) 94%, var(--interactive-accent) 6%);
+	--db-bg-drop-indicator: color-mix(in srgb, var(--background-secondary) 80%, var(--interactive-accent) 20%);
+	--db-border: color-mix(in srgb, var(--background-modifier-border) 90%, var(--text-muted) 10%);
+	--db-border-card: color-mix(in srgb, var(--background-modifier-border) 88%, var(--text-muted) 12%);
+	--db-border-section: transparent;
+	--db-border-sidebar: transparent;
+	--db-border-input: color-mix(in srgb, var(--background-modifier-border) 86%, var(--interactive-accent) 14%);
+	--db-border-input-focus: color-mix(in srgb, var(--interactive-accent) 58%, var(--text-muted) 42%);
+	--db-border-btn: color-mix(in srgb, var(--background-modifier-border) 86%, var(--interactive-accent) 14%);
+	--db-border-add-section: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border) 58%);
+	--db-text: var(--text-normal);
+	--db-text-muted: color-mix(in srgb, var(--text-muted) 88%, var(--interactive-accent) 12%);
+	--db-text-faint: color-mix(in srgb, var(--text-faint) 90%, var(--interactive-accent) 10%);
+	--db-banner-text: var(--text-normal);
+	--db-banner-text-muted: color-mix(in srgb, var(--text-muted) 86%, var(--text-normal) 14%);
+	--db-text-inverse: var(--text-on-accent);
+	--db-text-inverse-muted: color-mix(in srgb, var(--text-on-accent) 68%, transparent);
+	--db-accent: color-mix(in srgb, var(--interactive-accent) 60%, var(--text-muted) 40%);
+	--db-accent-light: color-mix(in srgb, var(--interactive-accent) 32%, var(--background-secondary) 68%);
+	--db-danger: color-mix(in srgb, var(--text-error) 78%, var(--text-muted) 22%);
+	--db-shadow-card: 0 1px 3px color-mix(in srgb, var(--text-normal) 8%, transparent);
+	--db-shadow-card-hover: 0 4px 12px color-mix(in srgb, var(--text-normal) 12%, transparent);
+	--db-backdrop-blur: none;
+	--db-font: var(--font-interface);
+	--db-progress-from: color-mix(in srgb, var(--interactive-accent) 58%, var(--text-muted) 42%);
+	--db-progress-to: color-mix(in srgb, var(--interactive-accent) 30%, var(--background-secondary) 70%);
+	--db-checkbox: color-mix(in srgb, var(--interactive-accent) 60%, var(--text-muted) 40%);
+	--db-quote-border: color-mix(in srgb, var(--interactive-accent) 42%, var(--background-modifier-border) 58%);
+	--db-link: color-mix(in srgb, var(--text-accent) 72%, var(--text-muted) 28%);
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	overflow: hidden;
+	background: var(--db-bg);
+	color: var(--db-text);
+	font-family: var(--db-font);
+	transition: background var(--db-motion-standard), color var(--db-motion-standard);
+}
+
+.theme-light .reman-workspace-root {
+	--db-text-muted: color-mix(in srgb, var(--text-normal) 62%, var(--text-muted) 38%);
+	--db-text-faint: color-mix(in srgb, var(--text-normal) 44%, var(--text-muted) 56%);
+	--db-accent: color-mix(in srgb, var(--interactive-accent) 76%, var(--text-normal) 24%);
+	--db-link: color-mix(in srgb, var(--text-accent) 74%, var(--text-normal) 26%);
+}
+
+.theme-dark .reman-workspace-root {
+	--db-bg-card: color-mix(in srgb, var(--background-primary) 72%, var(--background-secondary) 28%);
+	--db-bg-card-hover: color-mix(in srgb, var(--background-primary) 64%, var(--interactive-accent) 9%, var(--background-secondary) 27%);
+	--db-bg-overlay: linear-gradient(135deg, rgba(0,0,0,0.58) 0%, rgba(0,0,0,0.24) 100%);
+}
+
+.reman-workspace-root .dashboard-section-row,
