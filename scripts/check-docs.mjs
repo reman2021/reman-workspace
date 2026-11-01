@@ -3,7 +3,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const rootDocs = ['README.md', 'README_ZH.md', '使用说明_ZH.md'];
+const rootDocs = ['README.md', 'README_ZH.md'];
 
 async function collectMarkdown(directory) {
 	const files = [];

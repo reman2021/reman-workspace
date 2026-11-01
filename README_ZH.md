@@ -35,7 +35,7 @@ npm run build
 
 ## 文档
 
-- [使用说明](使用说明_ZH.md)
+- [使用说明](docs/使用说明.md)
 - [文档导航](docs/README.md)
 - [架构说明](docs/架构说明.md)
 - [开发指南](docs/开发指南.md)
