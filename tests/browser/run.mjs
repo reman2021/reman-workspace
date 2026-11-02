@@ -94,7 +94,7 @@ try {
 			'.dashboard-banner-edit-btn',
 			'.dashboard-qa-icon',
 			'.dashboard-card-body',
-			'.dashboard-sidebar-week-date',
+			'.dashboard-sidebar-week-cell:not(.dashboard-sidebar-week-cell--today) .dashboard-sidebar-week-date',
 		];
 		const palettes = {
 			light: { primary: '#ffffff', secondary: '#f4f4f4', hover: '#e7e7ee', border: '#dddddd', normal: '#252525', muted: '#666666', faint: '#999999', accent: '#6366f1', textAccent: '#514acb' },
@@ -282,6 +282,39 @@ try {
 	await libraryModal.locator('.dashboard-library-filter-config-value input').check();
 	assert.match(await libraryModal.locator('.dashboard-library-filter-config-summary').textContent(), /1/);
 	await page.keyboard.press('Escape');
+
+	// Table columns are selected, ordered and persisted per database configuration.
+	await page.locator('[data-column="Database"] .dashboard-section-add-btn').evaluate(el => el.click());
+	const tableColumnModal = page.locator('.modal--dashboard');
+	const tableColumnEditor = tableColumnModal.locator('.dashboard-library-table-column-editor');
+	assert.equal(await tableColumnEditor.evaluate(el => el.open), false);
+	assert.ok(await tableColumnModal.evaluate(el => Boolean(el.querySelector('.dashboard-library-filter-editor').compareDocumentPosition(el.querySelector('.dashboard-library-table-column-editor')) & Node.DOCUMENT_POSITION_FOLLOWING)));
+	await tableColumnEditor.locator('summary').click();
+	await page.screenshot({ path: '.test-output/table-columns-modal-desktop.png', fullPage: true });
+	await tableColumnModal.locator('.setting-item select').first().selectOption('table');
+	assert.equal(await tableColumnModal.locator('.dashboard-library-table-column-fixed').count(), 0);
+	await tableColumnModal.locator('[data-table-column="modified"] input').uncheck();
+	await tableColumnModal.locator('[data-table-column="tags"] input').uncheck();
+	await tableColumnModal.locator('[data-table-column="total"] [data-direction="up"]').click();
+	await tableColumnModal.getByRole('button', { name: '保存', exact: true }).click();
+	await page.waitForFunction(() => {
+		const config = dashboard.view.sync.getData().columns.find(column => column.name === 'Database').libraryConfig;
+		return config.viewMode === 'table' && JSON.stringify(config.tableColumns) === JSON.stringify(['total', 'completed']);
+	});
+	assert.deepEqual(await page.locator('[data-column="Database"] .dashboard-library-table th').allTextContents(), ['名称', 'total', 'completed']);
+	await page.locator('[data-column="Database"] .dashboard-library-table tbody td').first().click();
+	assert.equal(await page.evaluate(() => dashboard.app.opened.at(-1)), 'Learning/中文.md');
+	await page.locator('[data-column="Database"] .dashboard-library-table tbody td').nth(1).dblclick();
+	const tableEdit = page.locator('[data-column="Database"] .dashboard-library-table-edit-input');
+	await tableEdit.fill('7'); await tableEdit.press('Enter');
+	assert.equal(await page.evaluate(() => dashboard.app.files.find(file => file.path === 'Learning/中文.md').frontmatter.total), 7);
+	await page.evaluate(async () => {
+		await dashboard.view.sync.writeQueue;
+		const home = dashboard.app.files.find(file => file.path === 'Home.md');
+		if (!home.text.includes('tableColumns: ["total", "completed"]')) throw new Error('table column config was not serialized');
+		await dashboard.app.vault.modify(home, `${home.text}\n`);
+	});
+	await page.waitForFunction(() => JSON.stringify([...document.querySelectorAll('[data-column="Database"] .dashboard-library-table th')].map(cell => cell.textContent)) === JSON.stringify(['名称', 'total', 'completed']));
 	// Inline Todo edits, toggles and native drag events exercise the real renderer + sync.
 	await page.locator('[data-card-id=todo-1] .dashboard-task-text').first().dblclick();
 	const textarea = page.locator('[data-card-id=todo-1] .dashboard-task-text textarea');
@@ -412,6 +445,13 @@ try {
 	assert.equal(await page.locator('.modal--dashboard h2').textContent(), '计划卡片配置');
 	assert.equal(await page.locator('.modal--dashboard .modal-content > p').count(), 0);
 	await page.screenshot({ path: '.test-output/source-config-mobile.png', fullPage: true });
+	await page.keyboard.press('Escape');
+	await page.locator('[data-column="Database"] .dashboard-section-add-btn').evaluate(el => el.click());
+	const mobileTableColumnModal = page.locator('.modal--dashboard');
+	assert.ok(await mobileTableColumnModal.evaluate(el => el.getBoundingClientRect().width <= innerWidth));
+	assert.equal(await mobileTableColumnModal.locator('.dashboard-library-table-column-editor').evaluate(el => el.open), false);
+	await mobileTableColumnModal.locator('.dashboard-library-table-column-editor summary').click();
+	await page.screenshot({ path: '.test-output/table-columns-modal-mobile.png', fullPage: true });
 	await page.keyboard.press('Escape');
 	assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
 	await page.evaluate(async () => { await dashboard.view.onClose(); dashboard.view.containerEl.remove(); });

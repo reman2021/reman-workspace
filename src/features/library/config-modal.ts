@@ -1,6 +1,7 @@
 import { App, Modal, Setting, setIcon } from 'obsidian';
 import type { LibraryConfig, LibraryViewMode, PropertyFilter } from '../../core/types';
-import { extractFrontmatterProperties } from './query';
+import { extractFrontmatterProperties, queryVaultFiles } from './query';
+import { collectTableColumnCandidates, normalizeTableColumns, resolveTableColumns } from './table-columns';
 import { initializeDashboardModal } from '../../ui/theme';
 import { t } from '../../core/i18n';
 
@@ -21,6 +22,12 @@ export class LibraryConfigModal extends Modal {
 			if (!declared) properties.delete(synthetic);
 		}
 		const names = [...properties.keys()].sort();
+
+		let tableColumnsTouched = config.tableColumns !== undefined;
+		let selectedTableColumns = config.tableColumns !== undefined
+			? normalizeTableColumns(config.tableColumns) ?? []
+			: resolveTableColumns(config, queryVaultFiles(this.app, config));
+
 		const filterArea = root.createDiv({ cls: 'dashboard-library-filter-editor' });
 		let expandedIndex: number | null = null;
 		const renderFilters = () => {
@@ -95,14 +102,15 @@ export class LibraryConfigModal extends Modal {
 								? [...new Set([...filter.values, value])]
 								: filter.values.filter(item => item !== value);
 							updateSummary();
+							renderTableColumns();
 						});
 					}
 				};
 				search.addEventListener('input', renderValues);
 				renderValues();
 			});
+			renderTableColumns();
 		};
-		renderFilters();
 		new Setting(root).addButton(button => button.setButtonText(t('library.addFilter')).onClick(() => {
 			const property = names[0]; if (!property) return;
 			const filter: PropertyFilter = { property, values: [] };
@@ -110,6 +118,97 @@ export class LibraryConfigModal extends Modal {
 			expandedIndex = config.filters.length - 1;
 			renderFilters();
 		}));
+
+		const tableColumnEditor = root.createEl('details', { cls: 'dashboard-library-table-column-editor' });
+		tableColumnEditor.createEl('summary', { text: t('library.tableColumns') });
+		const tableColumnSearch = tableColumnEditor.createEl('input', {
+			cls: 'dashboard-modal-input dashboard-library-table-column-search',
+			attr: {
+				type: 'search',
+				placeholder: t('library.tableColumnSearchPlaceholder'),
+				'aria-label': t('library.tableColumnSearchPlaceholder'),
+			},
+		});
+		const tableColumnList = tableColumnEditor.createDiv({ cls: 'dashboard-library-table-column-list' });
+
+		const displayTableColumn = (column: string): string => column === 'modified' ? t('library.sortModified') : column;
+		const commitTableColumns = () => {
+			tableColumnsTouched = true;
+			config.tableColumns = [...selectedTableColumns];
+		};
+		const renderTableColumns = () => {
+			const results = queryVaultFiles(this.app, config);
+			const candidates = collectTableColumnCandidates(results);
+			const candidateSet = new Set(candidates);
+			if (!tableColumnsTouched) selectedTableColumns = resolveTableColumns(config, results);
+			const availableSelection = selectedTableColumns.filter(column => candidateSet.has(column));
+			if (availableSelection.length !== selectedTableColumns.length) {
+				selectedTableColumns = availableSelection;
+				if (tableColumnsTouched) config.tableColumns = [...selectedTableColumns];
+			}
+			const selected = new Set(selectedTableColumns);
+			const ordered = [
+				...selectedTableColumns,
+				...candidates.filter(column => !selected.has(column)).sort((a, b) => a.localeCompare(b)),
+			];
+			const search = tableColumnSearch.value.trim().toLowerCase();
+			const visible = search
+				? ordered.filter(column => displayTableColumn(column).toLowerCase().includes(search))
+				: ordered;
+
+			tableColumnList.empty();
+			if (visible.length === 0) {
+				tableColumnList.createDiv({ cls: 'dashboard-library-table-column-empty', text: t('library.tableColumnNoMatches') });
+				return;
+			}
+			for (const column of visible) {
+				const isSelected = selected.has(column);
+				const row = tableColumnList.createDiv({
+					cls: 'dashboard-library-table-column-row' + (isSelected ? ' is-selected' : ''),
+				});
+				row.dataset.tableColumn = column;
+				const label = row.createEl('label');
+				const checkbox = label.createEl('input', {
+					attr: { type: 'checkbox', 'aria-label': t('library.tableColumnToggle', { property: displayTableColumn(column) }) },
+				});
+				checkbox.checked = isSelected;
+				label.createSpan({ text: displayTableColumn(column) });
+				checkbox.addEventListener('change', () => {
+					selectedTableColumns = checkbox.checked
+						? [...selectedTableColumns, column]
+						: selectedTableColumns.filter(item => item !== column);
+					commitTableColumns();
+					renderTableColumns();
+				});
+
+				const actions = row.createDiv({ cls: 'dashboard-library-table-column-actions' });
+				if (!isSelected) continue;
+				const selectedIndex = selectedTableColumns.indexOf(column);
+				for (const [direction, offset, icon] of [['up', -1, 'arrow-up'], ['down', 1, 'arrow-down']] as const) {
+					const targetIndex = selectedIndex + offset;
+					const button = actions.createEl('button', {
+						cls: 'dashboard-library-table-column-move',
+						attr: {
+							type: 'button',
+							'aria-label': t(direction === 'up' ? 'library.tableColumnMoveUp' : 'library.tableColumnMoveDown', { property: displayTableColumn(column) }),
+							'data-direction': direction,
+						},
+					});
+					setIcon(button, icon);
+					button.disabled = targetIndex < 0 || targetIndex >= selectedTableColumns.length;
+					button.addEventListener('click', () => {
+						if (button.disabled) return;
+						const current = selectedTableColumns[selectedIndex]!;
+						selectedTableColumns[selectedIndex] = selectedTableColumns[targetIndex]!;
+						selectedTableColumns[targetIndex] = current;
+						commitTableColumns();
+						renderTableColumns();
+					});
+				}
+			}
+		};
+		tableColumnSearch.addEventListener('input', renderTableColumns);
+		renderFilters();
 		const sortOptions = Object.fromEntries(['modified', 'created', 'name', ...names].map(name => [name, name]));
 		new Setting(root).setName(t('library.sortBy')).addDropdown(control => control.addOptions(sortOptions).setValue(config.sortBy).onChange(value => { config.sortBy = value; }));
 		new Setting(root).setName(t('library.sortDesc')).addToggle(control => control.setValue(config.sortDesc).onChange(value => { config.sortDesc = value; }));

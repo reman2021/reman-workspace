@@ -5,6 +5,7 @@ import { t } from '../../core/i18n';
 import { inheritDashboardThemeVars } from '../../ui/theme';
 import { popupCleanups, showCalendarPopup } from './calendar-popup';
 import { DEFAULT_PAGE_SIZE, PAGE_SIZE_OPTIONS, formatDate, loadPreview, queryVaultFiles, type LibraryFileResult } from './query';
+import { resolveTableColumns } from './table-columns';
 
 export function renderLibrarySection(
 	el: HTMLElement,
@@ -493,8 +494,10 @@ function startCellEdit(
 	input.focus();
 	input.select();
 
+	let finished = false;
 	const finish = (save: boolean) => {
-		if (!input.isConnected) return;
+		if (finished || !input.isConnected) return;
+		finished = true;
 		const raw = input.value.trim();
 		input.remove();
 
@@ -543,23 +546,7 @@ function startCellEdit(
 }
 
 function renderTableView(container: HTMLElement, results: LibraryFileResult[], app: App, config: LibraryConfig): void {
-	// Determine which property columns to show
-	const propKeys = new Set<string>();
-	for (const filter of config.filters) {
-		if (filter.property !== 'tags' && filter.property !== 'modified' && filter.property !== 'created' && filter.property !== 'path') {
-			propKeys.add(filter.property);
-		}
-	}
-	// Also collect common properties from results
-	for (const result of results.slice(0, 20)) {
-		for (const key of Object.keys(result.frontmatter)) {
-			if (key === 'position') continue;
-			propKeys.add(key);
-			if (propKeys.size >= 6) break;
-		}
-	}
-
-	const columns = ['name', 'modified', ...propKeys];
+	const columns = ['name', ...resolveTableColumns(config, results)];
 
 	const table = container.createEl('table', { cls: 'dashboard-library-table' });
 	const thead = table.createEl('thead');

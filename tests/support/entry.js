@@ -7,6 +7,7 @@ export * from '../../src/core/types.ts';
 export * from '../../src/app/dashboard-view.ts';
 export * from '../../src/features/banner/index.ts';
 export * from '../../src/features/library/config-modal.ts';
+export * from '../../src/features/library/table-columns.ts';
 export * from '../../src/features/tracking/service.ts';
 export * from '../../src/ui/confirm-dialog.ts';
 export * from '../../src/core/i18n/index.ts';

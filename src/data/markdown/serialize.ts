@@ -96,12 +96,15 @@ export function serialize(data: DashboardData): string {
 			if (lc.pageSize) {
 				lines.push(`      pageSize: ${lc.pageSize}`);
 			}
-				if (lc.quickDateFilter) {
-					lines.push(`      quickDateFilter:`);
-					lines.push(`        property: "${lc.quickDateFilter.property}"`);
-					lines.push(`        start: "${lc.quickDateFilter.start}"`);
-					lines.push(`        end: "${lc.quickDateFilter.end}"`);
-				}
+			if (lc.quickDateFilter) {
+				lines.push(`      quickDateFilter:`);
+				lines.push(`        property: "${lc.quickDateFilter.property}"`);
+				lines.push(`        start: "${lc.quickDateFilter.start}"`);
+				lines.push(`        end: "${lc.quickDateFilter.end}"`);
+			}
+			if (lc.tableColumns !== undefined) {
+				lines.push(`      tableColumns: [${lc.tableColumns.map(column => `"${escapeYamlString(column)}"`).join(', ')}]`);
+			}
 			if (lc.filters.length > 0) {
 				lines.push('      filters:');
 				for (const filter of lc.filters) {

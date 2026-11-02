@@ -342,4 +342,10 @@ export const zh = {
 		'library.filterAnyValue': '属性存在即可',
 		'library.filterSearchPlaceholder': '搜索属性值...',
 		'library.filterNoValues': '没有匹配的属性值',
+		'library.tableColumns': '表格显示属性',
+		'library.tableColumnSearchPlaceholder': '搜索可显示属性...',
+		'library.tableColumnToggle': '显示 {property}',
+		'library.tableColumnMoveUp': '上移 {property}',
+		'library.tableColumnMoveDown': '下移 {property}',
+		'library.tableColumnNoMatches': '没有匹配的属性',
 	} as const;

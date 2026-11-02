@@ -132,8 +132,9 @@ export interface LibraryConfig {
 	sortBy: string;
 	sortDesc: boolean;
 	kanbanGroupBy?: string;
-		pageSize?: number;
-		quickDateFilter?: { property: 'created' | 'modified'; start: string; end: string };
+	pageSize?: number;
+	quickDateFilter?: { property: 'created' | 'modified'; start: string; end: string };
+	tableColumns?: string[];
 }
 
 export interface HeatmapItem {

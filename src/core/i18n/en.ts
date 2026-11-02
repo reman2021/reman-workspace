@@ -345,4 +345,10 @@ export const en = {
 		'library.filterAnyValue': 'Property exists',
 		'library.filterSearchPlaceholder': 'Search values...',
 		'library.filterNoValues': 'No matching values',
+		'library.tableColumns': 'Table columns',
+		'library.tableColumnSearchPlaceholder': 'Search available properties...',
+		'library.tableColumnToggle': 'Show {property}',
+		'library.tableColumnMoveUp': 'Move {property} up',
+		'library.tableColumnMoveDown': 'Move {property} down',
+		'library.tableColumnNoMatches': 'No matching properties',
 	} as const;

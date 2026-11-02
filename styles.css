@@ -3949,6 +3949,106 @@
 	color: var(--db-accent, var(--interactive-accent));
 }
 
+.dashboard-library-table-column-editor {
+	margin: 8px 0 12px;
+}
+
+.dashboard-library-table-column-editor > summary {
+	padding: 6px 4px;
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--db-text, var(--text-normal));
+	cursor: pointer;
+}
+
+.dashboard-library-table-column-editor[open] > summary {
+	margin-bottom: 6px;
+}
+
+.dashboard-library-table-column-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	min-height: 34px;
+	padding: 4px 7px;
+	border-radius: var(--db-radius-control);
+}
+.dashboard-library-table-column-row label {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	min-width: 0;
+	margin: 0;
+	color: var(--db-text, var(--text-normal));
+}
+.dashboard-library-table-column-row label span {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.dashboard-library-table-column-search {
+	display: block;
+	width: 100%;
+	height: 32px;
+	margin-bottom: 8px;
+}
+
+.dashboard-library-table-column-list {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	max-height: 220px;
+	overflow-y: auto;
+	padding: 2px;
+}
+
+.dashboard-library-table-column-row:hover,
+.dashboard-library-table-column-row.is-selected {
+	background: var(--db-bg-hover, var(--background-modifier-hover));
+}
+
+.dashboard-library-table-column-actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+}
+
+.dashboard-library-table-column-move {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none !important;
+	border-radius: var(--db-radius-control);
+	background: transparent !important;
+	box-shadow: none !important;
+	color: var(--db-text-muted, var(--text-muted));
+}
+
+.dashboard-library-table-column-move:hover:not(:disabled),
+.dashboard-library-table-column-move:focus-visible {
+	background: var(--db-bg-card, var(--background-primary)) !important;
+	color: var(--db-text, var(--text-normal));
+}
+
+.dashboard-library-table-column-move:disabled {
+	opacity: 0.3;
+}
+
+.dashboard-library-table-column-move svg {
+	width: 14px;
+	height: 14px;
+}
+
+.dashboard-library-table-column-empty {
+	padding: 10px;
+	text-align: center;
+	color: var(--db-text-muted, var(--text-muted));
+}
+
 .dashboard-library-filter-editor {
 	display: flex;
 	flex-direction: column;

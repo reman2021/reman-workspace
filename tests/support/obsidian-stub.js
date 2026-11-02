@@ -61,6 +61,7 @@ export class App {
 				list: async () => ({ files: [...this.backups.keys()].filter(path => path.endsWith('.md')), folders: [] }) },
 		});
 		this.metadataCache = Object.assign(new Events(), { getFileCache: file => ({ frontmatter: file.frontmatter }), getFirstLinkpathDest: path => this.files.find(file => file.path === path || file.basename === path) });
+		this.fileManager = { processFrontMatter: async (file, update) => { update(file.frontmatter); this.metadataCache.trigger('changed', file); } };
 		this.workspace = Object.assign(new Events(), {
 			getLeaf: () => ({ openFile: async file => this.opened.push(file.path) }), getLeavesOfType: () => [],
 			openLinkText: async path => this.opened.push(path), setActiveLeaf() {},

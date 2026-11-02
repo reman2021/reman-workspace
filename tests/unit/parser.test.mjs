@@ -11,6 +11,24 @@ export async function runParserTests(context) {
 		assert.equal(after.columns[3].heatmapItems[0].key, 'fitness');
 	});
 
+	await test('table columns preserve order, explicit empty state and normalized keys', () => {
+		const configured = fixture.replace(
+			'      sortDesc: true',
+			'      sortDesc: true\n      tableColumns: ["modified", "status", "modified", "", "name", "position", 7]',
+		);
+		const data = core.parse(configured);
+		assert.deepEqual(data.columns[2].libraryConfig.tableColumns, ['modified', 'status']);
+		assert.deepEqual(core.parse(core.serialize(data)).columns[2].libraryConfig.tableColumns, ['modified', 'status']);
+
+		const empty = core.parse(configured.replace('["modified", "status", "modified", "", "name", "position", 7]', '[]'));
+		assert.deepEqual(empty.columns[2].libraryConfig.tableColumns, []);
+		assert.match(core.serialize(empty), /tableColumns: \[\]/);
+
+		const legacy = core.parse(fixture);
+		assert.equal(legacy.columns[2].libraryConfig.tableColumns, undefined);
+		assert.doesNotMatch(core.serialize(legacy), /tableColumns:/);
+	});
+
 	await test('legacy weather block is opaque and byte-stable across another card edit', () => {
 		const data = core.parse(fixture); data.columns[0].cards[0].body += '\nNew thought';
 		const weather = fixture.slice(fixture.indexOf('### Old weather')).trim();

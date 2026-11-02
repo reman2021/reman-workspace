@@ -1,4 +1,5 @@
 import { parseTodoSources } from '../../features/todo-source/model';
+import { normalizeTableColumns } from '../../features/library/table-columns';
 import { formatValue } from '../../utils/value';
 import type {
 	BannerData,
@@ -243,13 +244,16 @@ function parseLibraryConfig(raw: Record<string, unknown>): LibraryConfig {
 		sortDesc: raw.sortDesc !== false,
 		kanbanGroupBy: raw.kanbanGroupBy ? formatValue(raw.kanbanGroupBy) : undefined,
 		pageSize: typeof raw.pageSize === 'number' ? raw.pageSize : undefined,
-			quickDateFilter: raw.quickDateFilter && typeof raw.quickDateFilter === 'object' ? {
-				property: (raw.quickDateFilter as Record<string, unknown>).property === 'modified' ? 'modified' as const : 'created' as const,
-				start: formatValue((raw.quickDateFilter as Record<string, unknown>).start ?? ''),
-				end: formatValue((raw.quickDateFilter as Record<string, unknown>).end ?? ''),
-			} : undefined,
-		};
-	}
+		quickDateFilter: raw.quickDateFilter && typeof raw.quickDateFilter === 'object' ? {
+			property: (raw.quickDateFilter as Record<string, unknown>).property === 'modified' ? 'modified' as const : 'created' as const,
+			start: formatValue((raw.quickDateFilter as Record<string, unknown>).start ?? ''),
+			end: formatValue((raw.quickDateFilter as Record<string, unknown>).end ?? ''),
+		} : undefined,
+		tableColumns: Object.prototype.hasOwnProperty.call(raw, 'tableColumns')
+			? normalizeTableColumns(raw.tableColumns)
+			: undefined,
+	};
+}
 function splitByH2(body: string): Array<{ heading: string; content: string }> {
 	const lines = body.split('\n');
 	const sections: Array<{ heading: string; content: string }> = [];
